@@ -11,7 +11,12 @@ start(_Type, _Args) ->
     {ok, Pid}.
 
 main() ->
+    Start = erlang:monotonic_time(millisecond),
     io:format("Hello, World!~n"),
+    erlang:display(
+        os:cmd("cd cli && gleam build")),
+    End = erlang:monotonic_time(millisecond),
+    erlang:display(End - Start),
     erlang:halt(0).
 
 stop(_State) ->
