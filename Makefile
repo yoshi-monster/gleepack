@@ -22,7 +22,9 @@ $(OTP_SRC):
 patch: $(BUILD_ROOT)/patched
 $(BUILD_ROOT)/patched: $(OTP_SRC)
 	cp otp/unix_prim_file.c $(OTP_SRC)/erts/emulator/nifs/unix/unix_prim_file.c
+	cp otp/gleepack_vfs.h   $(OTP_SRC)/erts/emulator/nifs/unix/gleepack_vfs.h
 	cp otp/gleepack_entry.c $(OTP_SRC)/erts/emulator/sys/unix/erl_main.c
+	cp otp/gleepack_vfs.h   $(OTP_SRC)/erts/emulator/sys/unix/gleepack_vfs.h
 	touch $(BUILD_ROOT)/patched
 
 configure: $(BUILD_ROOT)/configured
