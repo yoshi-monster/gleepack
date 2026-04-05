@@ -67,14 +67,15 @@ shell:
 # appended to build/gleepack to produce a self-contained test binary.
 test-release: $(TEST_BINARY)
 
-$(TEST_BINARY): $(BUILD_ROOT)/gleepack $(TEST_APP_DIR)/rebar.config $(TEST_APP_DIR)/src/hello_world.erl
+$(TEST_BINARY): $(BUILD_ROOT)/gleepack $(TEST_APP_DIR)/rebar.config $(TEST_APP_DIR)/src/hello_world.erl otp/erl_inetrc
 	cd $(TEST_APP_DIR) && rebar3 release
 	erl -noshell -eval \
 		'Beams = filelib:wildcard("$(CURDIR)/$(TEST_REL_DIR)/lib/**/*.beam"), \
 		 beam_lib:strip_files(Beams), \
 		 erlang:halt(0).'
+	cp otp/erl_inetrc $(TEST_REL_DIR)/erl_inetrc
 	rm -f $(BUILD_ROOT)/test-release.zip
-	cd $(TEST_REL_DIR) && zip -qr $(CURDIR)/$(BUILD_ROOT)/test-release.zip lib releases
+	cd $(TEST_REL_DIR) && zip -qr $(CURDIR)/$(BUILD_ROOT)/test-release.zip lib releases erl_inetrc
 	cp $(BUILD_ROOT)/gleepack $@
 	cat $(BUILD_ROOT)/test-release.zip >> $@
 	chmod +x $@
