@@ -389,6 +389,7 @@ main(int argc, char **argv)
         "-bindir",  bindir,
         "-progname","erl",
         "-boot",    "/__gleepack__/releases/1.0.0/start",
+        "-kernel",  "inetrc", "\"/__gleepack__/erl_inetrc\"",
         "-noshell",
         "-noinput",
         NULL
