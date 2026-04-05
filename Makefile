@@ -3,10 +3,9 @@ OTP_TAG     := OTP-$(OTP_VERSION)
 BUILD_ROOT  := build
 OTP_SRC     := $(BUILD_ROOT)/otp-$(OTP_VERSION)
 
-# System OTP root and erts bin dir — used for boot files and stdlib when running a shell.
-# Our custom beam.smp needs -root/-bindir to find kernel/stdlib/etc.
+# System OTP root — used for boot files and stdlib when running a shell.
+# Our custom beam.smp needs -root to find kernel/stdlib/etc.
 ERTS_ROOT := $(shell erl -eval 'io:format("~s",[code:root_dir()])' -noshell -s erlang halt 2>/dev/null)
-ERTS_BIN  := $(shell ls -d $(ERTS_ROOT)/erts-*/bin 2>/dev/null | head -1)
 
 TEST_APP_DIR     := test/hello_world
 TEST_REL_DIR     := $(TEST_APP_DIR)/_build/default/rel/hello_world
@@ -24,11 +23,12 @@ $(OTP_SRC):
 	git clone --depth=1 --branch=$(OTP_TAG) https://github.com/erlang/otp.git $(OTP_SRC)
 
 patch: $(BUILD_ROOT)/patched
-$(BUILD_ROOT)/patched: $(OTP_SRC) otp/unix_prim_file.c otp/gleepack_vfs.h otp/gleepack_entry.c
+$(BUILD_ROOT)/patched: $(OTP_SRC) otp/unix_prim_file.c otp/gleepack_vfs.h otp/gleepack_entry.c otp/sys_drivers.c
 	cp otp/unix_prim_file.c $(OTP_SRC)/erts/emulator/nifs/unix/unix_prim_file.c
 	cp otp/gleepack_vfs.h   $(OTP_SRC)/erts/emulator/nifs/unix/gleepack_vfs.h
 	cp otp/gleepack_entry.c $(OTP_SRC)/erts/emulator/sys/unix/erl_main.c
 	cp otp/gleepack_vfs.h   $(OTP_SRC)/erts/emulator/sys/unix/gleepack_vfs.h
+	cp otp/sys_drivers.c    $(OTP_SRC)/erts/emulator/sys/unix/sys_drivers.c
 	touch $(BUILD_ROOT)/patched
 
 configure: $(BUILD_ROOT)/configured
@@ -55,9 +55,8 @@ $(BUILD_ROOT)/gleepack: $(BUILD_ROOT)/configured $(BUILD_ROOT)/patched
 # active — opening a /__gleepack__/ path will log to stderr.
 shell:
 	@test -f $(BUILD_ROOT)/gleepack || (echo "Run 'make build' first"; exit 1)
-	BINDIR=$(ERTS_BIN) ROOTDIR=$(ERTS_ROOT) $(BUILD_ROOT)/gleepack -- \
+	ROOTDIR=$(ERTS_ROOT) $(BUILD_ROOT)/gleepack -- \
 		-root $(ERTS_ROOT) \
-		-bindir $(ERTS_BIN) \
 		-progname erl \
 		-boot $(ERTS_ROOT)/bin/start_clean \
 		-home $(HOME) \
@@ -83,7 +82,7 @@ $(TEST_BINARY): $(BUILD_ROOT)/gleepack $(TEST_APP_DIR)/rebar.config $(TEST_APP_D
 	@echo "Run with: make test-run"
 
 test-run: $(TEST_BINARY)
-	BINDIR=$(ERTS_BIN) $(TEST_BINARY)
+	$(TEST_BINARY)
 
 clean-otp:
 	rm -rf $(BUILD_ROOT)/*
