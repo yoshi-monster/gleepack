@@ -22,9 +22,9 @@
 
 /*
  * gleepack patch: replaces the forker mechanism (erl_child_setup subprocess +
- * Unix Domain Socket protocol) with direct posix_spawn() calls and a dedicated
- * waitpid thread for exit-status collection. This eliminates the BINDIR
- * dependency and the erl_child_setup binary entirely.
+ * Unix Domain Socket protocol) with direct posix_spawn() calls and the
+ * self-pipe trick for SIGCHLD-driven exit-status collection. This eliminates
+ * the BINDIR dependency and the erl_child_setup binary entirely.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -70,8 +70,6 @@
 #include <sys/spawn.h>
 #endif
 
-/* sem_post is async-signal-safe; used in SIGCHLD handler to wake waitpid thread */
-#include <semaphore.h>
 
 #define WANT_NONBLOCKING    /* must define this to pull in defs from sys.h */
 #include "sys.h"
@@ -183,7 +181,7 @@ typedef struct driver_data {
  * ============================================================================
  * gleepack: pid->port_id hash table (adapted from erl_child_setup.c lines
  * 639-717). Protected by forker_hash_lock because spawn_start() runs on a
- * scheduler thread while the waitpid thread accesses the hash concurrently.
+ * scheduler thread while forker_ready_input accesses the hash concurrently.
  * ============================================================================
  */
 
@@ -196,16 +194,17 @@ typedef struct exit_status {
 static Hash *forker_hash;
 static ErlDrvMutex *forker_hash_lock;
 
-/* waitpid thread state */
-static ErlDrvTid waitpid_thread_id;
-static volatile int waitpid_thread_running = 0;
-static sem_t waitpid_sem;  /* posted by SIGCHLD handler or forker_stop() */
+/* Self-pipe for SIGCHLD notification */
+static int forker_pipe[2] = {-1, -1};
 
-/* Async-signal-safe: wake the waitpid thread whenever a child exits. */
+/* Async-signal-safe: write 1 byte to the pipe whenever a child exits. */
 static void sigchld_handler(int sig)
 {
+    char byte = 0;
     (void)sig;
-    sem_post(&waitpid_sem);
+    /* write() to a pipe is async-signal-safe per POSIX */
+    while (write(forker_pipe[1], &byte, 1) == -1 && errno == EINTR)
+        ;
 }
 
 static HashValue fhash(void *e)
@@ -290,51 +289,9 @@ static Eterm remove_os_pid_mapping(pid_t os_pid)
     return port_id;
 }
 
-/* Forward declaration: forker_sigchld is defined later but called from the
- * waitpid thread. */
+/* Forward declaration: forker_sigchld is defined later but called from
+ * forker_ready_input on the BEAM scheduler thread. */
 static void forker_sigchld(Eterm port_id, int error);
-
-/*
- * ============================================================================
- * gleepack: waitpid thread.
- *
- * Blocks on a semaphore. The SIGCHLD signal handler (sigchld_handler) posts
- * the semaphore whenever a child exits — sem_post is async-signal-safe so this
- * is safe to call from a signal handler on any BEAM thread. On wakeup the
- * thread drains all pending children with waitpid(-1, WNOHANG).
- *
- * Shutdown: forker_stop() sets waitpid_thread_running = 0 then posts the
- * semaphore to unblock the thread.
- * ============================================================================
- */
-static void *waitpid_thread_func(void *arg)
-{
-    while (1) {
-        /* sem_wait can return EINTR if a signal arrives; just retry. */
-        while (sem_wait(&waitpid_sem) != 0 && errno == EINTR)
-            continue;
-
-        if (!waitpid_thread_running)
-            break;
-
-        pid_t pid;
-        int status;
-        while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-            Eterm port_id = remove_os_pid_mapping(pid);
-            if (port_id != THE_NON_VALUE) {
-                int err;
-                if (WIFEXITED(status))
-                    err = 0;
-                else if (WIFSIGNALED(status))
-                    err = EINTR;
-                else
-                    err = ECHILD;
-                forker_sigchld(port_id, err);
-            }
-        }
-    }
-    return NULL;
-}
 
 /* I. Initialization */
 
@@ -365,7 +322,7 @@ erl_sys_late_init(void)
     erts_sys_unix_later_init(); /* Need to be called after forker has been started */
     /* erts_sys_unix_later_init() sets SIGCHLD → SIG_IGN, which would prevent
      * our signal handler from ever firing. Reinstall it here so that child
-     * exit notifications are delivered to the waitpid thread via the semaphore. */
+     * exit notifications are delivered to forker_ready_input via the pipe. */
     signal(SIGCHLD, sigchld_handler);
 }
 
@@ -396,6 +353,7 @@ static void stop_select(ErlDrvEvent, void*);
 /* II.V Forker prototypes */
 static ErlDrvData forker_start(ErlDrvPort, char*, SysDriverOpts*);
 static void forker_stop(ErlDrvData);
+static void forker_ready_input(ErlDrvData, ErlDrvEvent);
 
 
 /* III Driver entries */
@@ -455,8 +413,9 @@ struct erl_drv_entry fd_driver_entry = {
 
 /* III.III The forker driver
  *
- * gleepack: ready_input, ready_output, and control are all NULL because we no
- * longer use a Unix Domain Socket to communicate with erl_child_setup.
+ * gleepack: ready_output and control are NULL because we no longer use a Unix
+ * Domain Socket. ready_input is forker_ready_input, called by BEAM's I/O
+ * poller when the self-pipe is readable (SIGCHLD fired).
  * The name "spawn_forker" MUST be preserved — erl_sys_late_init() opens this
  * driver by name.
  */
@@ -465,8 +424,8 @@ struct erl_drv_entry forker_driver_entry = {
     forker_start,
     forker_stop,
     NULL,
-    NULL,           /* ready_input  — was UDS read handler, now unused */
-    NULL,           /* ready_output — was UDS write handler, now unused */
+    forker_ready_input, /* ready_input  — called when SIGCHLD pipe is readable */
+    NULL,               /* ready_output — unused */
     "spawn_forker",
     NULL,
     NULL,
@@ -1673,18 +1632,44 @@ void fd_ready_async(ErlDrvData drv_data,
  *
  * forker_start() no longer fork+exec's erl_child_setup. Instead it:
  *   1. Initialises the pid→port_id hash table and its mutex
- *   2. Initialises the waitpid semaphore
- *   3. Creates the waitpid thread using the BEAM driver thread API
+ *   2. Creates the self-pipe for SIGCHLD notification
+ *   3. Registers the read end with BEAM's I/O poller via driver_select
  *
  * SIGCHLD is installed by erl_sys_late_init() after erts_sys_unix_later_init()
  * (which sets it to SIG_IGN), so we don't install it here.
  *
- * forker_stop() signals the waitpid thread to exit and joins it.
+ * forker_stop() deregisters the pipe from the poller and closes both fds.
  *
- * forker_ready_input, forker_ready_output, and forker_control are all gone
- * (set to NULL in forker_driver_entry above). The UDS socket is gone too.
+ * forker_ready_output and forker_control are NULL. The UDS socket is gone.
  * ============================================================================
  */
+
+/* Called by BEAM's I/O poller when forker_pipe[0] is readable (SIGCHLD fired). */
+static void forker_ready_input(ErlDrvData e, ErlDrvEvent event)
+{
+    char buf[64];
+    pid_t pid;
+    int status;
+    (void)e;
+    (void)event;
+    /* Drain all bytes from the pipe */
+    while (read(forker_pipe[0], buf, sizeof(buf)) > 0)
+        ;
+    /* Now reap all finished children */
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        Eterm port_id = remove_os_pid_mapping(pid);
+        if (port_id != THE_NON_VALUE) {
+            int err;
+            if (WIFEXITED(status))
+                err = 0;
+            else if (WIFSIGNALED(status))
+                err = EINTR;
+            else
+                err = ECHILD;
+            forker_sigchld(port_id, err);
+        }
+    }
+}
 
 static ErlDrvData forker_start(ErlDrvPort port_num, char* name,
                                SysDriverOpts* opts)
@@ -1695,29 +1680,36 @@ static ErlDrvData forker_start(ErlDrvPort port_num, char* name,
     forker_hash_lock = erl_drv_mutex_create("forker_hash_lock");
     forker_hash_init();
 
-    sem_init(&waitpid_sem, 0, 0);
-
-    waitpid_thread_running = 1;
-
-    if (erl_drv_thread_create("waitpid_thread",
-                              &waitpid_thread_id,
-                              waitpid_thread_func,
-                              NULL,
-                              NULL) != 0) {
+    /* Create the self-pipe for SIGCHLD notification */
+    if (pipe(forker_pipe) != 0) {
         erts_exit(ERTS_ABORT_EXIT,
-                  "gleepack: failed to create waitpid thread: %d\n", errno);
+                  "gleepack: failed to create forker pipe: %d\n", errno);
     }
+    /* Both ends non-blocking: write end so signal handler never blocks,
+       read end so drain loop in forker_ready_input terminates. */
+    fcntl(forker_pipe[0], F_SETFL, O_NONBLOCK);
+    fcntl(forker_pipe[1], F_SETFL, O_NONBLOCK);
+    /* Close-on-exec so spawned children don't inherit the pipe */
+    fcntl(forker_pipe[0], F_SETFD, FD_CLOEXEC);
+    fcntl(forker_pipe[1], F_SETFD, FD_CLOEXEC);
+
+    /* Register the read end with BEAM's I/O poller */
+    driver_select(port_num,
+                  (ErlDrvEvent)(intptr_t)forker_pipe[0],
+                  ERL_DRV_READ, 1);
 
     return (ErlDrvData)port_num;
 }
 
 static void forker_stop(ErlDrvData e)
 {
-    /* Signal the waitpid thread to exit and wait for it */
-    waitpid_thread_running = 0;
-    sem_post(&waitpid_sem);  /* wake the thread so it checks the flag */
-    erl_drv_thread_join(waitpid_thread_id, NULL);
-    sem_destroy(&waitpid_sem);
+    /* Deregister pipe from I/O poller and close both ends */
+    driver_select((ErlDrvPort)e,
+                  (ErlDrvEvent)(intptr_t)forker_pipe[0],
+                  ERL_DRV_READ, 0);
+    close(forker_pipe[0]);
+    close(forker_pipe[1]);
+    forker_pipe[0] = forker_pipe[1] = -1;
     signal(SIGCHLD, SIG_DFL);
 
     /* Tear down hash table and mutex */
