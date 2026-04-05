@@ -8,7 +8,7 @@
 #include <stddef.h>
 #include <sys/types.h>
 
-#include "prim_file_nif.h"
+/* hash.h is available in both nifs/unix and sys/unix build contexts. */
 #include "hash.h"
 
 /* Magic discriminator: stored in every efile_gleepack_t to distinguish gleepack
@@ -19,6 +19,12 @@
 #define GLEEPACK_PREFIX     "/__gleepack__/"
 #define GLEEPACK_PREFIX_LEN 14
 
+/* efile_gleepack_t and gleepack_is_handle() require efile_data_t from
+ * prim_file_nif.h.  They are only needed in unix_prim_file.c (nifs/unix
+ * build context).  The caller must #define GLEEPACK_HAVE_EFILE_DATA before
+ * including this header to opt in; erl_main.c (sys/unix) does not define it
+ * and therefore gets only the VFS index/lookup API. */
+#ifdef GLEEPACK_HAVE_EFILE_DATA
 /* In-memory file handle.  The common field MUST be first so that a pointer to
  * efile_gleepack_t can be safely cast to efile_data_t * and back (C-style
  * inheritance, matching the efile_unix_t pattern in unix_prim_file.c). */
@@ -29,6 +35,7 @@ typedef struct {
     size_t         size;   /* total uncompressed size */
     size_t         pos;    /* current read position */
 } efile_gleepack_t;
+#endif /* GLEEPACK_HAVE_EFILE_DATA */
 
 /* One entry in the VFS index.  HashBucket MUST be the first field — required
  * by hash.h so that (HashBucket *) == (gleepack_index_entry_t *). */
@@ -74,9 +81,12 @@ const uint8_t *gleepack_vfs_get_data(gleepack_index_entry_t *entry);
  * Wraps hash_foreach; used by efile_list_dir. */
 void gleepack_vfs_foreach(void (*fn)(gleepack_index_entry_t *, void *), void *arg);
 
-/* Return 1 if d is a gleepack handle (magic check), 0 otherwise. */
+/* Return 1 if d is a gleepack handle (magic check), 0 otherwise.
+ * Only available when GLEEPACK_HAVE_EFILE_DATA is defined (unix_prim_file.c). */
+#ifdef GLEEPACK_HAVE_EFILE_DATA
 static inline int gleepack_is_handle(efile_data_t *d) {
     return ((efile_gleepack_t *)d)->magic == GLEEPACK_MAGIC;
 }
+#endif /* GLEEPACK_HAVE_EFILE_DATA */
 
 #endif /* GLEEPACK_VFS_H */

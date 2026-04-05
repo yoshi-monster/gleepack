@@ -46,6 +46,9 @@
 #include <utime.h>
 #include <stdio.h>
 
+#define GLEEPACK_HAVE_EFILE_DATA
+#include "gleepack_vfs.h"
+
 #define FALLBACK_RW_LENGTH ((1ull << 31) - 1)
 
 /* Macros for testing file types. */
@@ -102,6 +105,11 @@ posix_errno_t efile_marshal_path(ErlNifEnv *env, ERL_NIF_TERM path, efile_path_t
 }
 
 ERL_NIF_TERM efile_get_handle(ErlNifEnv *env, efile_data_t *d) {
+    if (gleepack_is_handle(d)) {
+        ERL_NIF_TERM handle;
+        enif_make_new_binary(env, 0, &handle);
+        return handle;
+    }
     efile_unix_t *u = (efile_unix_t*)d;
     int fd = u->fd;
     ERL_NIF_TERM handle;
@@ -114,6 +122,7 @@ ERL_NIF_TERM efile_get_handle(ErlNifEnv *env, efile_data_t *d) {
 }
 
 posix_errno_t efile_dup_handle(ErlNifEnv *env, efile_data_t *d, ErlNifEvent *handle) {
+    if (gleepack_is_handle(d)) return EBADF;
     efile_unix_t *u = (efile_unix_t*)d;
     int fd;
 
@@ -176,10 +185,27 @@ posix_errno_t efile_open(const efile_path_t *path, enum efile_modes_t modes,
 
     int mode, flags, fd;
 
-    /* Phase 2: confirm patch is in place. Phase 3 replaces this with VFS logic. */
-    if (strncmp((const char*)path->data, "/__gleepack__/", 14) == 0) {
-        fprintf(stderr, "GLEEPACK: efile_open intercepted: %s\n",
-                (const char*)path->data);
+    if (strncmp((const char *)path->data, GLEEPACK_PREFIX, GLEEPACK_PREFIX_LEN) == 0) {
+        const char *vfs_path = (const char *)path->data + GLEEPACK_PREFIX_LEN;
+        gleepack_index_entry_t *entry = gleepack_vfs_lookup(vfs_path);
+        if (entry == NULL) {
+            (*d) = NULL;
+            return ENOENT;
+        }
+        const uint8_t *data = gleepack_vfs_get_data(entry);
+        if (data == NULL) {
+            (*d) = NULL;
+            return EIO;
+        }
+        efile_gleepack_t *g = (efile_gleepack_t *)enif_alloc_resource(
+            nif_type, sizeof(efile_gleepack_t));
+        g->magic = GLEEPACK_MAGIC;
+        g->buf   = data;
+        g->size  = entry->uncomp_size;
+        g->pos   = 0;
+        EFILE_INIT_RESOURCE(&g->common, modes);
+        (*d) = &g->common;
+        return 0;
     }
 
     flags = get_flags(modes);
@@ -251,6 +277,10 @@ posix_errno_t efile_from_fd(int fd,
 }
 
 int efile_close(efile_data_t *d, posix_errno_t *error) {
+    if (gleepack_is_handle(d)) {
+        enif_release_resource(d);
+        return 1;
+    }
     efile_unix_t *u = (efile_unix_t*)d;
     int fd;
 
@@ -297,6 +327,19 @@ static void shift_iov(SysIOVec **iov, int *iovlen, ssize_t shift) {
 }
 
 Sint64 efile_readv(efile_data_t *d, SysIOVec *iov, int iovlen) {
+    if (gleepack_is_handle(d)) {
+        efile_gleepack_t *g = (efile_gleepack_t *)d;
+        Sint64 total = 0;
+        for (int i = 0; i < iovlen; i++) {
+            size_t avail = g->size > g->pos ? g->size - g->pos : 0;
+            size_t n = iov[i].iov_len < avail ? iov[i].iov_len : avail;
+            if (n == 0) break;
+            memcpy(iov[i].iov_base, g->buf + g->pos, n);
+            g->pos += n;
+            total  += n;
+        }
+        return total;
+    }
     efile_unix_t *u = (efile_unix_t*)d;
 
     Sint64 bytes_read;
@@ -348,6 +391,7 @@ Sint64 efile_readv(efile_data_t *d, SysIOVec *iov, int iovlen) {
 }
 
 Sint64 efile_writev(efile_data_t *d, SysIOVec *iov, int iovlen) {
+    if (gleepack_is_handle(d)) { d->posix_errno = EBADF; return -1; }
     efile_unix_t *u = (efile_unix_t*)d;
 
     Sint64 bytes_written;
@@ -398,6 +442,20 @@ Sint64 efile_writev(efile_data_t *d, SysIOVec *iov, int iovlen) {
 }
 
 Sint64 efile_preadv(efile_data_t *d, Sint64 offset, SysIOVec *iov, int iovlen) {
+    if (gleepack_is_handle(d)) {
+        efile_gleepack_t *g = (efile_gleepack_t *)d;
+        Sint64 total = 0;
+        size_t pos = (size_t)(offset < 0 ? 0 : offset);
+        for (int i = 0; i < iovlen; i++) {
+            size_t avail = g->size > pos ? g->size - pos : 0;
+            size_t n = iov[i].iov_len < avail ? iov[i].iov_len : avail;
+            if (n == 0) break;
+            memcpy(iov[i].iov_base, g->buf + pos, n);
+            pos   += n;
+            total += n;
+        }
+        return total;
+    }
     efile_unix_t *u = (efile_unix_t*)d;
 
     Uint64 bytes_read;
@@ -457,6 +515,7 @@ Sint64 efile_preadv(efile_data_t *d, Sint64 offset, SysIOVec *iov, int iovlen) {
 }
 
 Sint64 efile_pwritev(efile_data_t *d, Sint64 offset, SysIOVec *iov, int iovlen) {
+    if (gleepack_is_handle(d)) { d->posix_errno = EBADF; return -1; }
     efile_unix_t *u = (efile_unix_t*)d;
 
     Sint64 bytes_written;
@@ -513,6 +572,21 @@ Sint64 efile_pwritev(efile_data_t *d, Sint64 offset, SysIOVec *iov, int iovlen) 
 }
 
 int efile_seek(efile_data_t *d, enum efile_seek_t seek, Sint64 offset, Sint64 *new_position) {
+    if (gleepack_is_handle(d)) {
+        efile_gleepack_t *g = (efile_gleepack_t *)d;
+        Sint64 new_pos;
+        switch (seek) {
+            case EFILE_SEEK_BOF: new_pos = offset; break;
+            case EFILE_SEEK_CUR: new_pos = (Sint64)g->pos + offset; break;
+            case EFILE_SEEK_EOF: new_pos = (Sint64)g->size + offset; break;
+            default: d->posix_errno = EINVAL; return 0;
+        }
+        if (new_pos < 0) new_pos = 0;
+        if ((size_t)new_pos > g->size) new_pos = (Sint64)g->size;
+        g->pos = (size_t)new_pos;
+        *new_position = new_pos;
+        return 1;
+    }
     efile_unix_t *u = (efile_unix_t*)d;
     off_t result;
     int whence;
@@ -547,6 +621,7 @@ int efile_seek(efile_data_t *d, enum efile_seek_t seek, Sint64 offset, Sint64 *n
 }
 
 int efile_sync(efile_data_t *d, int data_only) {
+    if (gleepack_is_handle(d)) return 1;
     efile_unix_t *u = (efile_unix_t*)d;
 
 #if defined(HAVE_FDATASYNC) && !defined(__DARWIN__)
@@ -575,6 +650,7 @@ int efile_sync(efile_data_t *d, int data_only) {
 }
 
 int efile_advise(efile_data_t *d, Sint64 offset, Sint64 length, enum efile_advise_t advise) {
+    if (gleepack_is_handle(d)) return 1;
 #ifdef HAVE_POSIX_FADVISE
     efile_unix_t *u = (efile_unix_t*)d;
     int p_advise;
@@ -605,6 +681,7 @@ int efile_advise(efile_data_t *d, Sint64 offset, Sint64 length, enum efile_advis
 }
 
 int efile_allocate(efile_data_t *d, Sint64 offset, Sint64 length) {
+    if (gleepack_is_handle(d)) { d->posix_errno = EBADF; return 0; }
     efile_unix_t *u = (efile_unix_t*)d;
     int ret = -1;
 
@@ -698,6 +775,7 @@ int efile_allocate(efile_data_t *d, Sint64 offset, Sint64 length) {
 }
 
 int efile_truncate(efile_data_t *d) {
+    if (gleepack_is_handle(d)) { d->posix_errno = EBADF; return 0; }
     efile_unix_t *u = (efile_unix_t*)d;
     off_t offset;
 
@@ -714,6 +792,17 @@ int efile_truncate(efile_data_t *d) {
     }
 
     return 1;
+}
+
+typedef struct { const char *prefix; size_t len; int found; } gleepack_prefix_ctx_t;
+
+static void check_prefix(gleepack_index_entry_t *e, void *arg) {
+    gleepack_prefix_ctx_t *c = arg;
+    if (c->found) return;
+    if (strncmp(e->filename, c->prefix, c->len) == 0) {
+        char ch = e->filename[c->len];
+        if (ch == '/' || ch == '\0') c->found = 1;
+    }
 }
 
 static void build_file_info(struct stat *data, efile_fileinfo_t *result) {
@@ -744,6 +833,44 @@ static void build_file_info(struct stat *data, efile_fileinfo_t *result) {
 }
 
 posix_errno_t efile_read_info(const efile_path_t *path, int follow_links, efile_fileinfo_t *result) {
+    if (strncmp((const char *)path->data, GLEEPACK_PREFIX, GLEEPACK_PREFIX_LEN) == 0) {
+        const char *vfs_path = (const char *)path->data + GLEEPACK_PREFIX_LEN;
+
+        /* Check if it's an exact file match */
+        gleepack_index_entry_t *entry = gleepack_vfs_lookup(vfs_path);
+        if (entry != NULL) {
+            /* File exists in archive */
+            memset(result, 0, sizeof(*result));
+            result->type   = EFILE_FILETYPE_REGULAR;
+            result->size   = entry->uncomp_size;
+            result->access = EFILE_ACCESS_READ;
+            result->mode   = 0444;  /* r--r--r-- */
+            result->links  = 1;
+            return 0;
+        }
+
+        /* Check if it's a directory prefix — use foreach since index is a Hash* */
+        size_t vfs_path_len = strlen(vfs_path);
+        /* Strip trailing slash before prefix check */
+        while (vfs_path_len > 0 && vfs_path[vfs_path_len - 1] == '/') vfs_path_len--;
+
+        /* Use a small helper struct to short-circuit on first match */
+        gleepack_prefix_ctx_t ctx = { vfs_path, vfs_path_len, 0 };
+        gleepack_vfs_foreach(check_prefix, &ctx);
+
+        if (ctx.found) {
+            memset(result, 0, sizeof(*result));
+            result->type   = EFILE_FILETYPE_DIRECTORY;
+            result->access = EFILE_ACCESS_READ;
+            result->mode   = 0555;
+            result->links  = 1;
+            return 0;
+        }
+
+        return ENOENT;
+    }
+
+    /* Original OS logic below */
     struct stat data;
 
     if(follow_links) {
@@ -808,6 +935,16 @@ static int check_access(struct stat *st) {
 }
 
 posix_errno_t efile_read_handle_info(efile_data_t *d, efile_fileinfo_t *result) {
+    if (gleepack_is_handle(d)) {
+        efile_gleepack_t *g = (efile_gleepack_t *)d;
+        memset(result, 0, sizeof(*result));
+        result->type   = EFILE_FILETYPE_REGULAR;
+        result->access = EFILE_ACCESS_READ;
+        result->size   = (Sint64)g->size;
+        result->mode   = 0444;
+        result->links  = 1;
+        return 0;
+    }
     struct stat data;
     efile_unix_t *u = (efile_unix_t*)d;
 
@@ -901,6 +1038,46 @@ posix_errno_t efile_read_link(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_
     }
 }
 
+/* --- gleepack list_dir helpers (file scope) --- */
+
+typedef struct {
+    const char *dir_prefix;   /* vfs path without /__gleepack__/ prefix, no trailing slash */
+    size_t      dir_len;
+    char      **names;        /* malloc'd array of malloc'd name strings */
+    size_t      count;
+    size_t      capacity;
+} list_dir_ctx_t;
+
+static void list_dir_collect(gleepack_index_entry_t *entry, void *arg) {
+    list_dir_ctx_t *ctx = arg;
+    const char *fname = entry->filename;
+
+    /* Must start with dir_prefix followed by '/' (or dir_len==0 for root listing) */
+    if (ctx->dir_len > 0) {
+        if (strncmp(fname, ctx->dir_prefix, ctx->dir_len) != 0) return;
+        if (fname[ctx->dir_len] != '/') return;
+    }
+
+    /* Immediate child name: the path component right after the prefix */
+    const char *child = fname + (ctx->dir_len == 0 ? 0 : ctx->dir_len + 1);
+    if (*child == '\0') return;
+    const char *slash = strchr(child, '/');
+    size_t name_len = slash ? (size_t)(slash - child) : strlen(child);
+
+    /* Grow array if needed */
+    if (ctx->count == ctx->capacity) {
+        ctx->capacity = ctx->capacity ? ctx->capacity * 2 : 16;
+        ctx->names = realloc(ctx->names, ctx->capacity * sizeof(char*));
+    }
+    ctx->names[ctx->count++] = strndup(child, name_len);
+}
+
+static int cmp_str(const void *a, const void *b) {
+    return strcmp(*(const char **)a, *(const char **)b);
+}
+
+/* --- end gleepack list_dir helpers --- */
+
 static int is_ignored_name(int name_length, const char *name) {
     if(name_length == 1 && name[0] == '.') {
         return 1;
@@ -912,6 +1089,43 @@ static int is_ignored_name(int name_length, const char *name) {
 }
 
 posix_errno_t efile_list_dir(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_TERM *result) {
+    if (strncmp((const char *)path->data, GLEEPACK_PREFIX, GLEEPACK_PREFIX_LEN) == 0) {
+        const char *vfs_path = (const char *)path->data + GLEEPACK_PREFIX_LEN;
+        size_t vfs_path_len = strlen(vfs_path);
+        /* Strip trailing slash */
+        while (vfs_path_len > 0 && vfs_path[vfs_path_len - 1] == '/') vfs_path_len--;
+
+        list_dir_ctx_t ctx = {vfs_path, vfs_path_len, NULL, 0, 0};
+        gleepack_vfs_foreach(list_dir_collect, &ctx);
+
+        if (ctx.count == 0) {
+            *result = enif_make_list(env, 0);
+            return ENOENT;
+        }
+
+        /* Sort and deduplicate */
+        qsort(ctx.names, ctx.count, sizeof(char*), cmp_str);
+        ERL_NIF_TERM list_head = enif_make_list(env, 0);
+        for (size_t i = ctx.count; i-- > 0; ) {
+            if (i + 1 < ctx.count && strcmp(ctx.names[i], ctx.names[i+1]) == 0) {
+                free(ctx.names[i]);
+                continue;
+            }
+            size_t len = strlen(ctx.names[i]);
+            unsigned char *buf;
+            ERL_NIF_TERM term;
+            buf = enif_make_new_binary(env, len, &term);
+            sys_memcpy(buf, ctx.names[i], len);
+            list_head = enif_make_list_cell(env, term, list_head);
+            free(ctx.names[i]);
+        }
+        free(ctx.names);
+
+        *result = list_head;
+        return 0;
+    }
+
+    /* Original OS opendir() logic below */
     ERL_NIF_TERM list_head;
 
     struct dirent *dir_entry;

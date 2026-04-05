@@ -72,16 +72,13 @@ static HashFunctions vfs_hash_fns = {
 
 /* Read a little-endian uint16 from an unaligned pointer. */
 static uint16_t le16(const uint8_t *p) {
-    uint16_t v;
-    memcpy(&v, p, 2);
-    return v;
+    return (uint16_t)(p[0] | (uint16_t)p[1] << 8);
 }
 
 /* Read a little-endian uint32 from an unaligned pointer. */
 static uint32_t le32(const uint8_t *p) {
-    uint32_t v;
-    memcpy(&v, p, 4);
-    return v;
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8
+         | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
 /* ── Platform: locate the running executable ──────────────────────────────── */
@@ -196,7 +193,7 @@ static void parse_central_directory(const uint8_t *map, size_t map_size,
             exit(1);
         }
 
-        uint16_t compression        = le16(p + 8);
+        uint16_t compression        = le16(p + 10); /* offset 10: compression method (not 8: general purpose bit flag) */
         uint32_t comp_size          = le32(p + 20);
         uint32_t uncomp_size        = le32(p + 24);
         uint32_t local_header_offset = le32(p + 42);
@@ -353,10 +350,24 @@ main(int argc, char **argv)
     gleepack_vfs_init();
 
     /* Build a fixed argv that pins -root to /__gleepack__ so the OTP boot
-     * process expands $ROOT correctly (Pattern 5 / D-16). */
+     * process expands $ROOT correctly (Pattern 5 / D-16). init.erl requires
+     * both a -root and a -bindir flag. BINDIR must also be set in the
+     * environment (checked by sys_drivers.c at forker port startup).
+     *
+     * For standalone use: set BINDIR to a directory containing erl_child_setup
+     * (extracted from the VFS at startup — future work). For now, read from env. */
+    char *bindir = getenv("BINDIR");
+    if (!bindir || bindir[0] == '\0') {
+        fprintf(stderr, "gleepack: BINDIR environment variable is not set.\n"
+                        "Set BINDIR to the directory containing erl_child_setup.\n");
+        return 1;
+    }
+
     char *new_argv[] = {
         argv[0],
+        "--",
         "-root",    "/__gleepack__",
+        "-bindir",  bindir,
         "-progname","erl",
         "-boot",    "/__gleepack__/releases/1.0.0/start",
         "-noshell",

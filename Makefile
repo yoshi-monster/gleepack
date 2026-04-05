@@ -8,7 +8,11 @@ OTP_SRC     := $(BUILD_ROOT)/otp-$(OTP_VERSION)
 ERTS_ROOT := $(shell erl -eval 'io:format("~s",[code:root_dir()])' -noshell -s erlang halt 2>/dev/null)
 ERTS_BIN  := $(shell ls -d $(ERTS_ROOT)/erts-*/bin 2>/dev/null | head -1)
 
-.PHONY: all cli checkout patch configure build shell clean-otp
+TEST_APP_DIR     := test/hello_world
+TEST_REL_DIR     := $(TEST_APP_DIR)/_build/default/rel/hello_world
+TEST_BINARY      := $(BUILD_ROOT)/hello_world_test
+
+.PHONY: all cli checkout patch configure build shell test-release test-run clean-otp
 
 all: cli
 
@@ -20,7 +24,7 @@ $(OTP_SRC):
 	git clone --depth=1 --branch=$(OTP_TAG) https://github.com/erlang/otp.git $(OTP_SRC)
 
 patch: $(BUILD_ROOT)/patched
-$(BUILD_ROOT)/patched: $(OTP_SRC)
+$(BUILD_ROOT)/patched: $(OTP_SRC) otp/unix_prim_file.c otp/gleepack_vfs.h otp/gleepack_entry.c
 	cp otp/unix_prim_file.c $(OTP_SRC)/erts/emulator/nifs/unix/unix_prim_file.c
 	cp otp/gleepack_vfs.h   $(OTP_SRC)/erts/emulator/nifs/unix/gleepack_vfs.h
 	cp otp/gleepack_entry.c $(OTP_SRC)/erts/emulator/sys/unix/erl_main.c
@@ -59,6 +63,27 @@ shell:
 		-home $(HOME) \
 		-start_epmd false \
 		-dist_listen false
+
+# Build the test hello_world release using rebar3, then package it as a ZIP
+# appended to build/gleepack to produce a self-contained test binary.
+test-release: $(TEST_BINARY)
+
+$(TEST_BINARY): $(BUILD_ROOT)/gleepack $(TEST_APP_DIR)/rebar.config $(TEST_APP_DIR)/src/hello_world.erl
+	cd $(TEST_APP_DIR) && rebar3 release
+	erl -noshell -eval \
+		'Beams = filelib:wildcard("$(CURDIR)/$(TEST_REL_DIR)/lib/**/*.beam"), \
+		 lists:foreach(fun(F) -> beam_lib:strip(F) end, Beams), \
+		 erlang:halt(0).'
+	rm -f $(BUILD_ROOT)/test-release.zip
+	cd $(TEST_REL_DIR) && zip -qr $(CURDIR)/$(BUILD_ROOT)/test-release.zip lib releases
+	cp $(BUILD_ROOT)/gleepack $@
+	cat $(BUILD_ROOT)/test-release.zip >> $@
+	chmod +x $@
+	@echo "Built: $@"
+	@echo "Run with: make test-run"
+
+test-run: $(TEST_BINARY)
+	BINDIR=$(ERTS_BIN) $(TEST_BINARY)
 
 clean-otp:
 	rm -rf $(BUILD_ROOT)/*

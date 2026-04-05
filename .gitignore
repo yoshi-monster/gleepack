@@ -1,11 +1,10 @@
 *.beam
 *.ez
-*/build
-build/
+build
+_build
 erl_crash.dump
-references/
-.planning/
-.claude/
+/references
+/.planning
+/.claude
 CLAUDE.md
 AGENT.md
-skills
