@@ -1,0 +1,8 @@
+{application, hello_world, [
+    {description, "Minimal hello world for gleepack testing"},
+    {vsn, "1.0.0"},
+    {modules, []},
+    {registered, []},
+    {applications, [kernel, stdlib]},
+    {mod, {hello_world, []}}
+]}.
