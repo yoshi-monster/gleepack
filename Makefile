@@ -71,7 +71,7 @@ $(TEST_BINARY): $(BUILD_ROOT)/gleepack $(TEST_APP_DIR)/rebar.config $(TEST_APP_D
 	cd $(TEST_APP_DIR) && rebar3 release
 	erl -noshell -eval \
 		'Beams = filelib:wildcard("$(CURDIR)/$(TEST_REL_DIR)/lib/**/*.beam"), \
-		 lists:foreach(fun(F) -> beam_lib:strip(F) end, Beams), \
+		 beam_lib:strip_files(Beams), \
 		 erlang:halt(0).'
 	rm -f $(BUILD_ROOT)/test-release.zip
 	cd $(TEST_REL_DIR) && zip -qr $(CURDIR)/$(BUILD_ROOT)/test-release.zip lib releases

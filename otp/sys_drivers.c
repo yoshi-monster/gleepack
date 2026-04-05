@@ -70,6 +70,9 @@
 #include <sys/spawn.h>
 #endif
 
+/* sem_post is async-signal-safe; used in SIGCHLD handler to wake waitpid thread */
+#include <semaphore.h>
+
 #define WANT_NONBLOCKING    /* must define this to pull in defs from sys.h */
 #include "sys.h"
 #include "erl_osenv.h"
@@ -196,6 +199,14 @@ static ErlDrvMutex *forker_hash_lock;
 /* waitpid thread state */
 static ErlDrvTid waitpid_thread_id;
 static volatile int waitpid_thread_running = 0;
+static sem_t waitpid_sem;  /* posted by SIGCHLD handler or forker_stop() */
+
+/* Async-signal-safe: wake the waitpid thread whenever a child exits. */
+static void sigchld_handler(int sig)
+{
+    (void)sig;
+    sem_post(&waitpid_sem);
+}
 
 static HashValue fhash(void *e)
 {
@@ -249,16 +260,14 @@ static void forker_hash_init(void)
     forker_hash = hash_new(0, "forker_hash", 16, hf);
 }
 
-/* Add a pid->port_id mapping. Called from spawn_start() on a scheduler thread. */
-static void add_os_pid_to_port_id_mapping(Eterm port_id, pid_t os_pid)
+/* Add a pid->port_id mapping (caller must hold forker_hash_lock). */
+static void add_os_pid_to_port_id_mapping_nolock(Eterm port_id, pid_t os_pid)
 {
     if (port_id != THE_NON_VALUE) {
         ErtsSysExitStatus es;
         es.os_pid  = os_pid;
         es.port_id = port_id;
-        erl_drv_mutex_lock(forker_hash_lock);
         hash_put(forker_hash, &es);
-        erl_drv_mutex_unlock(forker_hash_lock);
     }
 }
 
@@ -281,30 +290,29 @@ static Eterm remove_os_pid_mapping(pid_t os_pid)
     return port_id;
 }
 
+/* Forward declaration: forker_sigchld is defined later but called from the
+ * waitpid thread. */
+static void forker_sigchld(Eterm port_id, int error);
+
 /*
  * ============================================================================
  * gleepack: waitpid thread.
  *
- * Waits for SIGCHLD using sigwait() (portable: Linux and macOS both support it).
- * When SIGCHLD arrives, reaps all pending
- * children with waitpid(-1, WNOHANG) and calls forker_sigchld() for each one
- * that has a registered port mapping.
+ * Blocks on a semaphore. The SIGCHLD signal handler (sigchld_handler) posts
+ * the semaphore whenever a child exits — sem_post is async-signal-safe so this
+ * is safe to call from a signal handler on any BEAM thread. On wakeup the
+ * thread drains all pending children with waitpid(-1, WNOHANG).
  *
- * SIGCHLD is restored to SIG_DFL synchronously in forker_start() BEFORE this
- * thread is created and BEFORE erts_sys_unix_later_init() sets it to SIG_IGN.
+ * Shutdown: forker_stop() sets waitpid_thread_running = 0 then posts the
+ * semaphore to unblock the thread.
  * ============================================================================
  */
 static void *waitpid_thread_func(void *arg)
 {
-    sigset_t set;
-    sigemptyset(&set);
-    sigaddset(&set, SIGCHLD);
-    /* Block SIGCHLD in this thread so sigwait() can intercept it. */
-    pthread_sigmask(SIG_BLOCK, &set, NULL);
-
-    while (waitpid_thread_running) {
-        int sig;
-        sigwait(&set, &sig);
+    while (1) {
+        /* sem_wait can return EINTR if a signal arrives; just retry. */
+        while (sem_wait(&waitpid_sem) != 0 && errno == EINTR)
+            continue;
 
         if (!waitpid_thread_running)
             break;
@@ -355,6 +363,10 @@ erl_sys_late_init(void)
         erts_open_driver(&forker_driver, make_internal_pid(0), "forker", &opts, NULL, NULL);
     erts_mtx_unlock(port->lock);
     erts_sys_unix_later_init(); /* Need to be called after forker has been started */
+    /* erts_sys_unix_later_init() sets SIGCHLD → SIG_IGN, which would prevent
+     * our signal handler from ever firing. Reinstall it here so that child
+     * exit notifications are delivered to the waitpid thread via the semaphore. */
+    signal(SIGCHLD, sigchld_handler);
 }
 
 /* II. Prototypes */
@@ -385,8 +397,6 @@ static void stop_select(ErlDrvEvent, void*);
 static ErlDrvData forker_start(ErlDrvPort, char*, SysDriverOpts*);
 static void forker_stop(ErlDrvData);
 
-/* forward declaration needed by forker_stop */
-static void forker_sigchld(Eterm port_id, int error);
 
 /* III Driver entries */
 
@@ -411,7 +421,7 @@ struct erl_drv_entry spawn_driver_entry = {
     ERL_DRV_EXTENDED_MARKER,
     ERL_DRV_EXTENDED_MAJOR_VERSION,
     ERL_DRV_EXTENDED_MINOR_VERSION,
-    ERL_DRV_FLAG_USE_PORT_LOCKING | ERL_DRV_FLAG_USE_INIT_ACK,
+    ERL_DRV_FLAG_USE_PORT_LOCKING,
     NULL, NULL,
     stop_select
 };
@@ -832,9 +842,12 @@ static ErlDrvData spawn_start(ErlDrvPort port_num, char* name,
                                 DO_WRITE | DO_READ, opts->exit_status,
                                 (int)os_pid, 0, opts);
 
-        /* Register PID for exit-status tracking */
-        if (opts->exit_status)
-            add_os_pid_to_port_id_mapping(erts_drvport2id(port_num), os_pid);
+        /* Register PID for exit-status tracking. */
+        if (opts->exit_status) {
+            erl_drv_mutex_lock(forker_hash_lock);
+            add_os_pid_to_port_id_mapping_nolock(erts_drvport2id(port_num), os_pid);
+            erl_drv_mutex_unlock(forker_hash_lock);
+        }
 
         /* Set the OS pid on the port and acknowledge init immediately,
          * since we have the pid now (unlike the erl_child_setup model which
@@ -848,8 +861,6 @@ static ErlDrvData spawn_start(ErlDrvPort port_num, char* name,
 
         if (!(opts->read_write & DO_WRITE))
             dd->ofd->fd *= -1;
-
-        erl_drv_init_ack(port_num, (ErlDrvData)dd);
 
         return (ErlDrvData)dd;
     }
@@ -1662,9 +1673,11 @@ void fd_ready_async(ErlDrvData drv_data,
  *
  * forker_start() no longer fork+exec's erl_child_setup. Instead it:
  *   1. Initialises the pid→port_id hash table and its mutex
- *   2. Restores SIGCHLD to SIG_DFL synchronously (before erts_sys_unix_later_init
- *      sets it to SIG_IGN) so sigwait() in the waitpid thread will receive it
+ *   2. Initialises the waitpid semaphore
  *   3. Creates the waitpid thread using the BEAM driver thread API
+ *
+ * SIGCHLD is installed by erl_sys_late_init() after erts_sys_unix_later_init()
+ * (which sets it to SIG_IGN), so we don't install it here.
  *
  * forker_stop() signals the waitpid thread to exit and joins it.
  *
@@ -1682,11 +1695,7 @@ static ErlDrvData forker_start(ErlDrvPort port_num, char* name,
     forker_hash_lock = erl_drv_mutex_create("forker_hash_lock");
     forker_hash_init();
 
-    /* Restore SIGCHLD to SIG_DFL BEFORE the waitpid thread is created and
-     * BEFORE erts_sys_unix_later_init() sets it to SIG_IGN (Pitfall 2).
-     * The thread's sigwait() requires the signal NOT to be SIG_IGN at the
-     * process level; doing this synchronously here eliminates the race. */
-    signal(SIGCHLD, SIG_DFL);
+    sem_init(&waitpid_sem, 0, 0);
 
     waitpid_thread_running = 1;
 
@@ -1706,8 +1715,10 @@ static void forker_stop(ErlDrvData e)
 {
     /* Signal the waitpid thread to exit and wait for it */
     waitpid_thread_running = 0;
-    kill(getpid(), SIGCHLD); /* wake sigwait() so the thread checks the flag */
+    sem_post(&waitpid_sem);  /* wake the thread so it checks the flag */
     erl_drv_thread_join(waitpid_thread_id, NULL);
+    sem_destroy(&waitpid_sem);
+    signal(SIGCHLD, SIG_DFL);
 
     /* Tear down hash table and mutex */
     hash_delete(forker_hash);
