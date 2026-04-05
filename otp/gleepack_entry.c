@@ -96,6 +96,27 @@ static int open_self_exe(void) {
 #endif
 }
 
+/* Derive the directory containing the running binary.
+ * Used to set -bindir for erl_start() without requiring BINDIR env var.
+ * Per D-08: replaces the BINDIR environment variable with self-detection. */
+static char *derive_bindir_from_self(void) {
+    static char buf[4096];
+#ifdef __linux__
+    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n <= 0) return NULL;
+    buf[n] = '\0';
+#elif defined(__APPLE__)
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) != 0) return NULL;
+#else
+#  error "unsupported platform"
+#endif
+    /* Strip filename to get directory */
+    char *slash = strrchr(buf, '/');
+    if (slash) *slash = '\0';
+    return buf;
+}
+
 /* ── ZIP parsing ──────────────────────────────────────────────────────────── */
 
 /* Locate the EOCD record by scanning backward through map[0..size).
@@ -351,15 +372,13 @@ main(int argc, char **argv)
 
     /* Build a fixed argv that pins -root to /__gleepack__ so the OTP boot
      * process expands $ROOT correctly (Pattern 5 / D-16). init.erl requires
-     * both a -root and a -bindir flag. BINDIR must also be set in the
-     * environment (checked by sys_drivers.c at forker port startup).
+     * both a -root and a -bindir flag. BINDIR is derived from the executable's
+     * own path (no env var needed).
      *
-     * For standalone use: set BINDIR to a directory containing erl_child_setup
-     * (extracted from the VFS at startup — future work). For now, read from env. */
-    char *bindir = getenv("BINDIR");
-    if (!bindir || bindir[0] == '\0') {
-        fprintf(stderr, "gleepack: BINDIR environment variable is not set.\n"
-                        "Set BINDIR to the directory containing erl_child_setup.\n");
+     * Derived automatically — no env var needed. */
+    char *bindir = derive_bindir_from_self();
+    if (!bindir) {
+        fprintf(stderr, "gleepack: cannot determine binary directory\n");
         return 1;
     }
 
