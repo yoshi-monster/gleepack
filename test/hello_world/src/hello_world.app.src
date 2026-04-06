@@ -4,7 +4,7 @@
   {vsn, "1.0.0"},
   {modules, []},
   {registered, []},
-  {applications, [kernel, stdlib, inets, ssl]},
+  {applications, [kernel, stdlib]},
   {mod, {hello_world, []}}]}
 
 .

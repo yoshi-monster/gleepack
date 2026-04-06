@@ -11,14 +11,9 @@ start(_Type, _Args) ->
     {ok, Pid}.
 
 main() ->
-    application:ensure_all_started(ssl),
-    application:ensure_all_started(inets),
-    Start = erlang:monotonic_time(millisecond),
-    io:format("Hello, World!~n"),
-    {ok, {_, _, Body}} = httpc:request(<<"https://gleam.run"/utf8>>),
-    io:put_chars(Body),
-    End = erlang:monotonic_time(millisecond),
-    erlang:display(End - Start),
+    io:put_chars("Hello, world~\n"),
+    erlang:display(
+        init:get_plain_arguments()),
     erlang:halt(0).
 
 stop(_State) ->
