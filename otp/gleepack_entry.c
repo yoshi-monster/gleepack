@@ -370,32 +370,33 @@ main(int argc, char **argv)
 
     gleepack_vfs_init();
 
-    /* Build a fixed argv that pins -root to /__gleepack__ so the OTP boot
-     * process expands $ROOT correctly (Pattern 5 / D-16). init.erl requires
-     * both a -root and a -bindir flag. BINDIR is derived from the executable's
-     * own path (no env var needed).
-     *
-     * Derived automatically — no env var needed. */
-    char *bindir = derive_bindir_from_self();
-    if (!bindir) {
-        fprintf(stderr, "gleepack: cannot determine binary directory\n");
-        return 1;
-    }
-
-    char *new_argv[] = {
+    char *erlang_argv[] = {
         argv[0],
+        "-L",
+        "-d",
+        "-Bd",
+        "-sbtu",
+        "-A0",
+        "-P", "65536",
+        "-Q", "1024",
         "--",
-        "-root",    "/__gleepack__",
-        "-bindir",  bindir,
-        "-progname","erl",
-        "-boot",    "/__gleepack__/releases/1.0.0/start",
+        "-root", "/__gleepack__",
+        "-bindir", "/__gleepack/bin",
+        "-progname", argv[0],
+        "-boot", "/__gleepack__/releases/1.0.0/start",
         "-kernel",  "inetrc", "\"/__gleepack__/erl_inetrc\"",
         "-noshell",
         "-noinput",
-        NULL
+        "-mode",
+        "minimal",
+        "-extra"
     };
-    int new_argc = 0;
-    while (new_argv[new_argc] != NULL) new_argc++;
+
+    char **new_argv = malloc(sizeof(char*) * argc + sizeof(erlang_argv));
+    memcpy(new_argv, erlang_argv, sizeof(erlang_argv));
+    memcpy(new_argv + sizeof(erlang_argv) / sizeof(char*), argv, argc * sizeof(char*));
+
+    int new_argc = argc + sizeof(erlang_argv) / sizeof(char*);
 
     erl_start(new_argc, new_argv);
     return 0;
