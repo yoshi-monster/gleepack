@@ -62,19 +62,6 @@ $(BUILD_ROOT)/gleepack: $(BUILD_ROOT)/configured $(BUILD_ROOT)/patched
 	 cp $$BEAM $(BUILD_ROOT)/gleepack
 	@echo "beam.smp -> $(BUILD_ROOT)/gleepack"
 
-# Start an Erlang shell using our patched beam.
-# Uses the system OTP's boot files and stdlib (kernel, stdlib, etc.) since we only
-# build the emulator, not the full OTP release. The patched gleepack intercept is
-# active — opening a /__gleepack__/ path will log to stderr.
-shell:
-	@test -f $(BUILD_ROOT)/gleepack || (echo "Run 'make build' first"; exit 1)
-	ROOTDIR=$(ERTS_ROOT) $(BUILD_ROOT)/gleepack -- \
-		-root $(ERTS_ROOT) \
-		-progname erl \
-		-boot $(ERTS_ROOT)/bin/start_clean \
-		-home $(HOME) \
-		-start_epmd false \
-		-dist_listen false
 
 # Build the test hello_world release using rebar3, then package it as a ZIP
 # appended to build/gleepack to produce a self-contained test binary.
@@ -85,6 +72,8 @@ $(TEST_BINARY): $(BUILD_ROOT)/gleepack $(TEST_APP_DIR)/rebar.config $(TEST_APP_D
 	erl -noshell -eval \
 		'Beams = filelib:wildcard("$(CURDIR)/$(TEST_REL_DIR)/lib/**/*.beam"), \
 		 beam_lib:strip_files(Beams), \
+		 Others = filelib:wildcard("$(CURDIR)/$(TEST_REL_DIR)/lib/**/*.{c,h,erl,hrl,src,so}"), \
+		 lists:foreach(fun file:delete/1, Others), \
 		 erlang:halt(0).'
 	cp otp/erl_inetrc $(TEST_REL_DIR)/erl_inetrc
 	rm -f $(BUILD_ROOT)/test-release.zip
