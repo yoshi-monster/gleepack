@@ -5,7 +5,7 @@ import glint.{type Command}
 import snag.{type Snag}
 
 pub fn command() -> Command(Result(Nil, Snag)) {
-  use <- glint.command_help("Print the version of " <> config.app_name)
+  use <- glint.command_help("Print the version of gleepack.")
   use _, _, _ <- glint.command()
 
   io.println(ansi.pink(config.app_name) <> " v" <> version(config.app_name))
