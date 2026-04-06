@@ -15,9 +15,8 @@ main() ->
     application:ensure_all_started(inets),
     Start = erlang:monotonic_time(millisecond),
     io:format("Hello, World!~n"),
-    erlang:display(
-        httpc:request("https://gleam.run")),
-
+    {ok, {_, _, Body}} = httpc:request(<<"https://gleam.run"/utf8>>),
+    io:put_chars(Body),
     End = erlang:monotonic_time(millisecond),
     erlang:display(End - Start),
     erlang:halt(0).
