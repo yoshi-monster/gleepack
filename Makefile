@@ -37,13 +37,14 @@ OPENSSL_PREFIX := $(shell brew --prefix openssl@3 2>/dev/null || brew --prefix o
 configure: $(BUILD_ROOT)/configured
 $(BUILD_ROOT)/configured: $(OTP_SRC)
 	cd $(OTP_SRC) && \
-		LIBS="$(OPENSSL_PREFIX)/lib/libcrypto.a $(OPENSSL_PREFIX)/lib/libssl.a" \
+		LIBS="$(OPENSSL_PREFIX)/lib/libcrypto.a" \
 		LDFLAGS="-Wl,-dead_strip" \
 		./configure \
 			--enable-jit \
-	        --with-termcap \
+	        --without-termcap \
 	        --without-javac \
 	        --with-ssl=$(OPENSSL_PREFIX) \
+			--disable-dynamic-ssl-lib \
 	        --enable-static-nifs \
 	        --enable-static-drivers \
 	        --without-wx \
@@ -69,9 +70,9 @@ test-release: $(TEST_BINARY)
 
 $(TEST_BINARY): $(BUILD_ROOT)/gleepack $(TEST_APP_DIR)/rebar.config $(TEST_APP_DIR)/src/hello_world.erl otp/erl_inetrc
 	cd $(TEST_APP_DIR) && rebar3 release
+	chmod -R u+w "$(CURDIR)/$(TEST_REL_DIR)"
 	erl -noshell -eval \
-		'Beams = filelib:wildcard("$(CURDIR)/$(TEST_REL_DIR)/lib/**/*.beam"), \
-		 beam_lib:strip_files(Beams), \
+		 'beam_lib:strip_release("$(CURDIR)/$(TEST_REL_DIR)"), \
 		 Others = filelib:wildcard("$(CURDIR)/$(TEST_REL_DIR)/lib/**/*.{c,h,erl,hrl,src,so}"), \
 		 lists:foreach(fun file:delete/1, Others), \
 		 erlang:halt(0).'

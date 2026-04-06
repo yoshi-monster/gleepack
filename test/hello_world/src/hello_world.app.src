@@ -1,8 +1,10 @@
-{application, hello_world, [
-    {description, "Minimal hello world for gleepack testing"},
-    {vsn, "1.0.0"},
-    {modules, []},
-    {registered, []},
-    {applications, [kernel, stdlib, ssl, inets]},
-    {mod, {hello_world, []}}
-]}.
+{application,
+ hello_world,
+ [{description, "Minimal hello world for gleepack testing"},
+  {vsn, "1.0.0"},
+  {modules, []},
+  {registered, []},
+  {applications, [kernel, stdlib, inets, ssl]},
+  {mod, {hello_world, []}}]}
+
+.
