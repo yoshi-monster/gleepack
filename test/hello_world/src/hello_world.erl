@@ -11,10 +11,13 @@ start(_Type, _Args) ->
     {ok, Pid}.
 
 main() ->
+    application:ensure_all_started(ssl),
+    application:ensure_all_started(inets),
     Start = erlang:monotonic_time(millisecond),
     io:format("Hello, World!~n"),
     erlang:display(
-        os:cmd("cd cli && gleam build")),
+        httpc:request("https://gleam.run")),
+
     End = erlang:monotonic_time(millisecond),
     erlang:display(End - Start),
     erlang:halt(0).

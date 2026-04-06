@@ -31,14 +31,27 @@ $(BUILD_ROOT)/patched: $(OTP_SRC) otp/unix_prim_file.c otp/gleepack_vfs.h otp/gl
 	cp otp/sys_drivers.c    $(OTP_SRC)/erts/emulator/sys/unix/sys_drivers.c
 	touch $(BUILD_ROOT)/patched
 
+# TODO: Figure out what do to for real heree.
+OPENSSL_PREFIX := $(shell brew --prefix openssl@3 2>/dev/null || brew --prefix openssl 2>/dev/null)
+
 configure: $(BUILD_ROOT)/configured
 $(BUILD_ROOT)/configured: $(OTP_SRC)
-	cd $(OTP_SRC) && LDFLAGS="-Wl,-dead_strip" ./configure \
-		--without-wx \
-		--without-javac \
-		--without-odbc \
-		--without-jinterface \
-		--disable-parallel-configure
+	cd $(OTP_SRC) && \
+		LIBS="$(OPENSSL_PREFIX)/lib/libcrypto.a $(OPENSSL_PREFIX)/lib/libssl.a" \
+		LDFLAGS="-Wl,-dead_strip" \
+		./configure \
+			--enable-jit \
+	        --with-termcap \
+	        --without-javac \
+	        --with-ssl=$(OPENSSL_PREFIX) \
+	        --enable-static-nifs \
+	        --enable-static-drivers \
+	        --without-wx \
+	        --without-debugger \
+	        --without-observer \
+	        --without-docs \
+	        --without-odbc \
+			--disable-parallel-configure
 	touch $(BUILD_ROOT)/configured
 
 build: $(BUILD_ROOT)/gleepack
