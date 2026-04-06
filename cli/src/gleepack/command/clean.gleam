@@ -5,7 +5,13 @@ import snag.{type Snag}
 
 pub fn command() -> Command(Result(Nil, Snag)) {
   use <- glint.command_help(
-    "Remove the " <> config.app_name <> " build directory",
+    "
+Remove the gleepack build directory, discarding any previously compiled
+artefacts. This forces a full recompile on the next `gleepack build` run.
+
+This is usually not necessary — gleepack tracks changes and only recompiles
+what has changed.
+    ",
   )
   use _, _, _ <- glint.command
 

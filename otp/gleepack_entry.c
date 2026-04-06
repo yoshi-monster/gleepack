@@ -96,27 +96,6 @@ static int open_self_exe(void) {
 #endif
 }
 
-/* Derive the directory containing the running binary.
- * Used to set -bindir for erl_start() without requiring BINDIR env var.
- * Per D-08: replaces the BINDIR environment variable with self-detection. */
-static char *derive_bindir_from_self(void) {
-    static char buf[4096];
-#ifdef __linux__
-    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (n <= 0) return NULL;
-    buf[n] = '\0';
-#elif defined(__APPLE__)
-    uint32_t size = sizeof(buf);
-    if (_NSGetExecutablePath(buf, &size) != 0) return NULL;
-#else
-#  error "unsupported platform"
-#endif
-    /* Strip filename to get directory */
-    char *slash = strrchr(buf, '/');
-    if (slash) *slash = '\0';
-    return buf;
-}
-
 /* ── ZIP parsing ──────────────────────────────────────────────────────────── */
 
 /* Locate the EOCD record by scanning backward through map[0..size).
@@ -369,6 +348,15 @@ main(int argc, char **argv)
     sys_init_signal_stack();
 
     gleepack_vfs_init();
+
+    /* No archive attached — behave as a normal BEAM binary, passing the
+     * caller's argv straight through.  This allows the gleepack CLI to
+     * invoke the binary with standard flags (-root, -boot, -extra, etc.)
+     * to run escripts or Erlang files without a bundled release. */
+    if (g_vfs.zmap == NULL) {
+        erl_start(argc, argv);
+        return 0;
+    }
 
     char *erlang_argv[] = {
         argv[0],
