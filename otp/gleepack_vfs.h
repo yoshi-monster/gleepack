@@ -31,7 +31,7 @@
 typedef struct {
     efile_data_t   common; /* MUST be first — cast compatibility */
     uint32_t       magic;  /* == GLEEPACK_MAGIC */
-    const uint8_t *buf;    /* pointer into cached buffer */
+    uint8_t        *buf;    /* pointer into cached buffer */
     size_t         size;   /* total uncompressed size */
     size_t         pos;    /* current read position */
 } efile_gleepack_t;

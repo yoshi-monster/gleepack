@@ -132,10 +132,14 @@ $(TEST_BINARY): $(BUILD_ROOT)/gleepack $(TEST_APP_DIR)/rebar.config $(TEST_APP_D
 		 'beam_lib:strip_release("$(CURDIR)/$(TEST_REL_DIR)"), \
 		 Others = filelib:wildcard("$(CURDIR)/$(TEST_REL_DIR)/lib/**/*.{c,h,erl,hrl,src,so}"), \
 		 lists:foreach(fun file:delete/1, Others), \
+		 Dirs = lists:reverse(lists:sort(filelib:wildcard("$(CURDIR)/$(TEST_REL_DIR)/lib/**/"))), \
+		 lists:foreach(fun(D) -> file:del_dir(D) end, Dirs), \
 		 erlang:halt(0).'
 	cp otp/erl_inetrc $(TEST_REL_DIR)/erl_inetrc
+	mv $(TEST_REL_DIR)/releases/1.0.0/start.boot $(TEST_REL_DIR)
+	rm -fr $(TEST_REL_DIR)/releases
 	rm -f $(BUILD_ROOT)/test-release.zip
-	cd $(TEST_REL_DIR) && zip -qr $(CURDIR)/$(BUILD_ROOT)/test-release.zip lib releases erl_inetrc
+	cd $(TEST_REL_DIR) && zip -qr $(CURDIR)/$(BUILD_ROOT)/test-release.zip lib erl_inetrc start.boot
 	cp $(BUILD_ROOT)/gleepack $@
 	cat $(BUILD_ROOT)/test-release.zip >> $@
 	chmod +x $@
