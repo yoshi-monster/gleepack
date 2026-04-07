@@ -214,7 +214,7 @@ $(TOOLCHAIN_ASSEMBLED): $(OTP_BUILT) $(REBAR3_BIN) $(BUILD_ROOT)/elixir-built
 
 # Install the gleepack binary and the assembled toolchain into the cache.
 # Installation is a single rsync — no separate OTP / rebar3 / Elixir steps.
-install: $(BUILD_ROOT)/gleepack $(TOOLCHAIN_ASSEMBLED)
+install:
 	@CACHE="$$HOME/Library/Application Support/gleepack"; \
 	 RUNTIME_DIR="$$CACHE/runtime/$(RUNTIME_SLUG)"; \
 	 OTP_DIR="$$CACHE/otp/$(OTP_VERSION)"; \

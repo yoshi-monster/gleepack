@@ -3,7 +3,7 @@ import child_process/stdio
 import filepath
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{Some}
 import gleam/result
 import gleam/string
 import gleepack/config
@@ -76,17 +76,17 @@ key `tools." <> config.app_name <> ".targets`.
         _ -> Ok(Nil)
       })
 
-      let output =
+      let _output =
         output(flags)
         |> result.unwrap(
           project.output |> option.unwrap(filepath.join("build", project.name)),
         )
 
-      let entry =
+      let _entry =
         module(flags)
         |> result.unwrap(project.module |> option.unwrap(project.name))
 
-      use targets <- result.try(case targets(flags) {
+      use _targets <- result.try(case targets(flags) {
         Error(_) | Ok([]) ->
           case project.targets {
             [] ->
@@ -109,8 +109,8 @@ key `tools." <> config.app_name <> ".targets`.
 
       use _ <- result.try(run("gleam", in: ".", with: ["deps", "download"]))
 
-      use compile_deps <- result.try(project.read_compile_dependencies(project))
-      use dependencies <- result.try(project.read_dependencies(project))
+      use _compile_deps <- result.try(project.read_compile_dependencies(project))
+      use _dependencies <- result.try(project.read_dependencies(project))
 
       // use entrypoint_source <- result.try(
       //   entrypoint.render(project, entry)
