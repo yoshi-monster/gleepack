@@ -125,7 +125,7 @@ install: $(BUILD_ROOT)/gleepack $(OTP_BUILT)
 	   --include='*.boot' \
 	   --exclude='*' \
 	   $(OTP_SRC)/lib/ "$$OTP_DIR/lib/" && \
-	 erl -noshell -eval \
+	 PATH="$(OTP_BIN):$$PATH" erl -noshell -eval \
 	   "beam_lib:strip_release(\"$$OTP_DIR\"), erlang:halt(0)." && \
 	 echo "Installed runtime -> $$RUNTIME_DIR/gleepack" && \
 	 echo "Installed OTP     -> $$OTP_DIR"
@@ -203,10 +203,13 @@ install-tools: install $(REBAR3_BIN) $(BUILD_ROOT)/elixir-built
 # appended to build/gleepack to produce a self-contained test binary.
 test-release: $(TEST_BINARY)
 
-$(TEST_BINARY): $(BUILD_ROOT)/gleepack $(TEST_APP_DIR)/rebar.config $(TEST_APP_DIR)/src/hello_world.erl otp/erl_inetrc
-	cd $(TEST_APP_DIR) && rebar3 release
+$(TEST_BINARY): $(BUILD_ROOT)/gleepack $(TEST_APP_DIR)/rebar.config $(TEST_APP_DIR)/src/hello_world.erl otp/erl_inetrc $(REBAR3_BIN)
+	cd $(TEST_APP_DIR) && \
+		PATH="$(OTP_BIN):$$PATH" \
+		ERL_TOP="$(CURDIR)/$(OTP_SRC)" \
+		$(CURDIR)/$(REBAR3_BIN) release
 	chmod -R u+w "$(CURDIR)/$(TEST_REL_DIR)"
-	erl -noshell -eval \
+	PATH="$(OTP_BIN):$$PATH" erl -noshell -eval \
 		 'beam_lib:strip_release("$(CURDIR)/$(TEST_REL_DIR)"), \
 		 Others = filelib:wildcard("$(CURDIR)/$(TEST_REL_DIR)/lib/**/*.{c,h,erl,hrl,src,so}"), \
 		 lists:foreach(fun file:delete/1, Others), \
