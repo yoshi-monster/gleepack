@@ -1,10 +1,11 @@
-/// Parses and renders VM arguments for the erl_args file bundled in the ZIP.
-///
-/// Follows the erlexec convention: tokens starting with `+` are BEAM emulator
-/// flags (placed before `--`, leading `+` replaced with `-`), tokens starting
-/// with `-` are Erlang runtime flags (placed after `--`).  Bare tokens with no
-/// leading `+`/`-` are arguments to the preceding flag and go into the same
-/// section.
+//// Parses and renders VM arguments for the erl_args file bundled in the ZIP.
+////
+//// Follows the erlexec convention: tokens starting with `+` are BEAM emulator
+//// flags (placed before `--`, leading `+` replaced with `-`), tokens starting
+//// with `-` are Erlang runtime flags (placed after `--`).  Bare tokens with no
+//// leading `+`/`-` are arguments to the preceding flag and go into the same
+//// section.
+
 import gleam/list
 import gleam/string
 
@@ -24,10 +25,7 @@ type Section {
 
 /// Parse an `extra_emu_args` string into BEAM and Erlang flag lists.
 pub fn parse(input: String) -> EmuArgs {
-  let tokens =
-    string.split(input, " ")
-    |> list.filter(fn(s) { !string.is_empty(s) })
-  do_parse(tokens, [], [], Beam)
+  do_parse(string.split(input, " "), [], [], Beam)
 }
 
 fn do_parse(
@@ -42,6 +40,7 @@ fn do_parse(
         beam_flags: list.reverse(beam_acc),
         erlang_flags: list.reverse(erlang_acc),
       )
+    ["", ..rest] -> do_parse(rest, beam_acc, erlang_acc, section)
     ["+" <> flag, ..rest] ->
       do_parse(rest, ["-" <> flag, ..beam_acc], erlang_acc, Beam)
     ["-" <> _ as flag, ..rest] ->
@@ -60,17 +59,20 @@ fn do_parse(
 /// them with two pointer passes and zero copies. Structural flags (-root,
 /// -bindir, -boot, -kernel, -extra) are always included and are not
 /// user-configurable.
-pub fn render(args: EmuArgs, release_version: String) -> String {
-  let header = case args.beam_flags {
-    [] -> ["--"]
-    flags -> list.append(flags, ["--"])
-  }
+pub fn render(args: EmuArgs) -> String {
   let required = [
-    "-root", "/__gleepack__",
-    "-bindir", "/__gleepack__/bin",
-    "-boot", "/__gleepack__/releases/" <> release_version <> "/start",
-    "-kernel", "inetrc", "/__gleepack__/erl_inetrc",
+    "-root",
+    "/__gleepack__",
+    "-bindir",
+    "/__gleepack__/bin",
+    "-boot",
+    "/__gleepack__/start",
+    "-kernel",
+    "inetrc",
+    "/__gleepack__/erl_inetrc",
   ]
-  let all = list.flatten([header, required, args.erlang_flags])
+
+  let all = list.flatten([args.beam_flags, ["--"], required, args.erlang_flags])
+
   string.join(all, "\u{0}") <> "\u{0}"
 }
