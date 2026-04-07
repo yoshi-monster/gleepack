@@ -56,6 +56,10 @@ pub fn matching_native(matching other_target: Target) -> Result(Target, Nil) {
   })
 }
 
+pub fn supported(target: Target) -> Bool {
+  target.arch == platform.arch() && target.os == platform.os()
+}
+
 pub fn slug(target: Target) -> String {
   let arch = case target.arch {
     platform.Arm64 -> "aarch64"
@@ -177,7 +181,7 @@ fn install_runtime(cache_dir: String, target: Target) -> Result(String, Snag) {
     ansi.pink("Downloading") <> " " <> config.app_name <> " " <> slug(target),
   )
 
-  todo
+  panic as "todo"
   //
 }
 
@@ -191,7 +195,7 @@ fn install_otp(cache_dir: String, target: Target) -> Result(String, Snag) {
 
   io.println(ansi.pink("Downloading") <> " OTP " <> target.otp_version)
 
-  todo
+  panic as "todo"
 }
 
 fn runtime_dir_path(cache_dir: String, target: Target) -> String {

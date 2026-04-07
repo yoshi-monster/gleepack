@@ -34,61 +34,55 @@ pub fn parse_empty_test() {
   assert args.erlang_flags == []
 }
 
-fn tokens(args: emu_args.EmuArgs, version: String) -> List(String) {
-  emu_args.render(args, version)
+fn tokens(args: emu_args.EmuArgs) -> List(String) {
+  emu_args.render(args)
   |> string.split("\u{0}")
   |> list.filter(fn(s) { !string.is_empty(s) })
 }
 
 pub fn render_beam_and_erlang_test() {
   let args = emu_args.parse("+P 65536 -noshell -mode minimal")
-  assert tokens(args, "1.0.0") == [
-    "-P", "65536", "--",
-    "-root", "/__gleepack__",
-    "-bindir", "/__gleepack__/bin",
-    "-boot", "/__gleepack__/releases/1.0.0/start",
-    "-kernel", "inetrc", "/__gleepack__/erl_inetrc",
-    "-noshell", "-mode", "minimal",
-  ]
+  assert tokens(args)
+    == [
+      "-P", "65536", "--", "-root", "/__gleepack__", "-bindir",
+      "/__gleepack__/bin", "-boot", "/__gleepack__/start", "-kernel", "inetrc",
+      "/__gleepack__/erl_inetrc", "-noshell", "-mode", "minimal",
+    ]
 }
 
 pub fn render_no_beam_flags_test() {
   let args = emu_args.parse("-noshell")
-  assert tokens(args, "1.0.0") == [
-    "--",
-    "-root", "/__gleepack__",
-    "-bindir", "/__gleepack__/bin",
-    "-boot", "/__gleepack__/releases/1.0.0/start",
-    "-kernel", "inetrc", "/__gleepack__/erl_inetrc",
-    "-noshell",
-  ]
+  assert tokens(args)
+    == [
+      "--", "-root", "/__gleepack__", "-bindir", "/__gleepack__/bin", "-boot",
+      "/__gleepack__/start", "-kernel", "inetrc", "/__gleepack__/erl_inetrc",
+      "-noshell",
+    ]
 }
 
 pub fn render_no_erlang_flags_test() {
   let args = emu_args.parse("+P 65536")
-  assert tokens(args, "1.0.0") == [
-    "-P", "65536", "--",
-    "-root", "/__gleepack__",
-    "-bindir", "/__gleepack__/bin",
-    "-boot", "/__gleepack__/releases/1.0.0/start",
-    "-kernel", "inetrc", "/__gleepack__/erl_inetrc",
-  ]
+  assert tokens(args)
+    == [
+      "-P", "65536", "--", "-root", "/__gleepack__", "-bindir",
+      "/__gleepack__/bin", "-boot", "/__gleepack__/start", "-kernel", "inetrc",
+      "/__gleepack__/erl_inetrc",
+    ]
 }
 
 pub fn render_default_test() {
   let args = emu_args.parse(emu_args.default)
-  assert tokens(args, "1.0.0") == [
-    "-L", "-d", "-Bd", "-P", "65536", "-Q", "1024", "-sbtu", "-A0", "--",
-    "-root", "/__gleepack__",
-    "-bindir", "/__gleepack__/bin",
-    "-boot", "/__gleepack__/releases/1.0.0/start",
-    "-kernel", "inetrc", "/__gleepack__/erl_inetrc",
-    "-noshell", "-noinput", "-mode", "minimal",
-  ]
+  assert tokens(args)
+    == [
+      "-L", "-d", "-Bd", "-P", "65536", "-Q", "1024", "-sbtu", "-A0", "--",
+      "-root", "/__gleepack__", "-bindir", "/__gleepack__/bin", "-boot",
+      "/__gleepack__/start", "-kernel", "inetrc", "/__gleepack__/erl_inetrc",
+      "-noshell", "-noinput", "-mode", "minimal",
+    ]
 }
 
 pub fn render_trailing_nul_test() {
   // The raw bytes must end with NUL so the C 2-pass parser counts correctly.
   let args = emu_args.parse("+P 65536")
-  assert string.ends_with(emu_args.render(args, "1.0.0"), "\u{0}")
+  assert string.ends_with(emu_args.render(args), "\u{0}")
 }
