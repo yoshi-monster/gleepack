@@ -3,10 +3,6 @@ OTP_TAG     := OTP-$(OTP_VERSION)
 BUILD_ROOT  := build
 OTP_SRC     := $(BUILD_ROOT)/otp-$(OTP_VERSION)
 
-# System OTP root — used for boot files and stdlib when running a shell.
-# Our custom beam.smp needs -root to find kernel/stdlib/etc.
-ERTS_ROOT := $(shell erl -eval 'io:format("~s",[code:root_dir()])' -noshell -s erlang halt 2>/dev/null)
-
 TEST_APP_DIR     := test/hello_world
 TEST_REL_DIR     := $(TEST_APP_DIR)/_build/default/rel/hello_world
 TEST_BINARY      := $(BUILD_ROOT)/hello_world_test
@@ -29,6 +25,20 @@ RUNTIME_SLUG := $(HOST_ARCH)-$(HOST_OS)-otp-$(OTP_VERSION)
 # Sentinel file marking that OTP lib apps have been compiled.
 OTP_BUILT := $(BUILD_ROOT)/otp-built
 
+# rebar3: Erlang build tool, needed to produce OTP releases
+REBAR3_VERSION ?= 3.24.0
+REBAR3_TAG     := $(REBAR3_VERSION)
+REBAR3_SRC     := $(BUILD_ROOT)/rebar3-$(REBAR3_VERSION)
+REBAR3_BIN     := $(BUILD_ROOT)/rebar3
+
+# Elixir: needed for Mix releases and Elixir app support
+ELIXIR_VERSION ?= 1.18.3
+ELIXIR_TAG     := v$(ELIXIR_VERSION)
+ELIXIR_SRC     := $(BUILD_ROOT)/elixir-$(ELIXIR_VERSION)
+
+# Path to our custom OTP's bin directory (erl, erlc, etc.)
+OTP_BIN        := $(CURDIR)/$(OTP_SRC)/bin
+
 # TODO: Figure out what do to for real heree.
 OPENSSL_PREFIX := $(shell brew --prefix openssl@3 2>/dev/null || brew --prefix openssl 2>/dev/null)
 
@@ -48,7 +58,7 @@ CONFIGURE_FLAGS = \
 	--without-et \
 	--disable-parallel-configure
 
-.PHONY: all cli checkout patch build otp install shell test-release test-run clean-otp
+.PHONY: all cli checkout patch build otp install shell test-release test-run clean-otp rebar3-checkout rebar3-build elixir-checkout elixir-build install-tools
 
 all: cli
 
@@ -120,6 +130,74 @@ install: $(BUILD_ROOT)/gleepack $(OTP_BUILT)
 	 echo "Installed runtime -> $$RUNTIME_DIR/gleepack" && \
 	 echo "Installed OTP     -> $$OTP_DIR"
 
+
+# --- rebar3 from source ---
+
+rebar3-checkout: $(REBAR3_SRC)
+$(REBAR3_SRC):
+	git clone --depth=1 --branch=$(REBAR3_TAG) https://github.com/erlang/rebar3.git $(REBAR3_SRC)
+
+# Bootstrap rebar3 using our custom OTP. The bootstrap script calls erl/erlc
+# so we prepend our OTP bin dir to PATH. ERL_TOP tells the toolchain where to
+# find includes and lib apps (compiler, stdlib, kernel, etc.).
+rebar3-build: $(REBAR3_BIN)
+$(REBAR3_BIN): $(REBAR3_SRC) $(OTP_BUILT)
+	cd $(REBAR3_SRC) && \
+		PATH="$(OTP_BIN):$$PATH" \
+		ERL_TOP="$(CURDIR)/$(OTP_SRC)" \
+		./bootstrap
+	cp $(REBAR3_SRC)/rebar3 $(REBAR3_BIN)
+	touch $(BUILD_ROOT)/rebar3-built
+	@echo "rebar3 -> $(REBAR3_BIN)"
+
+# --- Elixir from source ---
+
+elixir-checkout: $(ELIXIR_SRC)
+$(ELIXIR_SRC):
+	git clone --depth=1 --branch=$(ELIXIR_TAG) https://github.com/elixir-lang/elixir.git $(ELIXIR_SRC)
+
+# Build Elixir using our custom OTP. Elixir's Makefile picks up erl/erlc
+# from PATH. We skip docs and install targets since we only need the compiled
+# BEAM files from lib/*/ebin/.
+elixir-build: $(BUILD_ROOT)/elixir-built
+$(BUILD_ROOT)/elixir-built: $(ELIXIR_SRC) $(OTP_BUILT)
+	cd $(ELIXIR_SRC) && \
+		PATH="$(OTP_BIN):$$PATH" \
+		$(MAKE) compile
+	touch $(BUILD_ROOT)/elixir-built
+	@echo "Elixir built -> $(ELIXIR_SRC)/lib"
+
+# --- Install rebar3 + Elixir as OTP apps ---
+#
+# Copies BEAM files from rebar3's _build/default/lib/*/ebin/ and Elixir's
+# lib/*/ebin/ into the OTP cache's lib/ directory. This makes them available
+# as standard OTP applications invocable via -run.
+# Also installs the rebar3 escript to otp/{version}/bin/ as a convenience.
+# Also copies start_clean.boot from the OTP build.
+install-tools: install $(REBAR3_BIN) $(BUILD_ROOT)/elixir-built
+	@CACHE="$$HOME/Library/Application Support/gleepack"; \
+	 OTP_DIR="$$CACHE/otp/$(OTP_VERSION)"; \
+	 echo "Installing rebar3 BEAM apps..." && \
+	 for app_ebin in $(REBAR3_SRC)/_build/default/lib/*/ebin; do \
+	   app_name=$$(basename $$(dirname $$app_ebin)); \
+	   mkdir -p "$$OTP_DIR/lib/$$app_name/ebin" && \
+	   cp $$app_ebin/*.beam $$app_ebin/*.app "$$OTP_DIR/lib/$$app_name/ebin/" 2>/dev/null; \
+	 done && \
+	 echo "Installing Elixir BEAM apps..." && \
+	 for elixir_app in $(ELIXIR_SRC)/lib/*/ebin; do \
+	   app_name=$$(basename $$(dirname $$elixir_app)); \
+	   version_suffix="$$app_name-$(ELIXIR_VERSION)"; \
+	   mkdir -p "$$OTP_DIR/lib/$$version_suffix/ebin" && \
+	   cp $$elixir_app/*.beam $$elixir_app/*.app "$$OTP_DIR/lib/$$version_suffix/ebin/" 2>/dev/null; \
+	 done && \
+	 mkdir -p "$$OTP_DIR/bin" && \
+	 cp $(REBAR3_BIN) "$$OTP_DIR/bin/rebar3" && \
+	 chmod +x "$$OTP_DIR/bin/rebar3" && \
+	 BOOT=$$(find $(OTP_SRC)/lib/sasl/ebin -name 'start_clean.boot' 2>/dev/null || find $(OTP_SRC) -name 'start_clean.boot' -type f 2>/dev/null | head -1) && \
+	 if [ -n "$$BOOT" ]; then cp "$$BOOT" "$$OTP_DIR/bin/start_clean.boot"; fi && \
+	 echo "Installed rebar3 apps to $$OTP_DIR/lib/" && \
+	 echo "Installed Elixir apps to $$OTP_DIR/lib/" && \
+	 echo "Installed rebar3 escript to $$OTP_DIR/bin/rebar3"
 
 # Build the test hello_world release using rebar3, then package it as a ZIP
 # appended to build/gleepack to produce a self-contained test binary.
