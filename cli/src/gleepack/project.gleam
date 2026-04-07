@@ -35,6 +35,7 @@ pub type Project {
     output: Option(String),
     module: Option(String),
     targets: List(target.Target),
+    extra_emu_args: Option(String),
   )
   Rebar3Project(
     name: String,
@@ -145,6 +146,11 @@ fn parse_project(
     |> or([]),
   )
 
+  use extra_emu_args <- result.try(
+    tom.get_string(project_file, ["tools", config.app_name, "extra_emu_args"])
+    |> optional,
+  )
+
   Ok(GleamProject(
     name:,
     version:,
@@ -159,6 +165,7 @@ fn parse_project(
     output:,
     module:,
     targets:,
+    extra_emu_args:,
   ))
 }
 
