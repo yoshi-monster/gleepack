@@ -1,8 +1,5 @@
-import child_process
-import child_process/stdio
 import filepath
 import gleam/dict.{type Dict}
-import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -186,31 +183,6 @@ fn or(result: Result(a, tom.GetError), default: a) -> Result(a, tom.GetError) {
 type StackItem {
   Visit(String)
   Emit(Project)
-}
-
-pub fn download_dependencies() -> Result(Nil, Snag) {
-  run("gleam", in: ".", with: ["deps", "download"])
-}
-
-fn run(
-  command: String,
-  in directory: String,
-  with args: List(String),
-) -> Result(Nil, Snag) {
-  case
-    child_process.from_name(command)
-    |> child_process.cwd(directory)
-    |> child_process.args(args)
-    |> child_process.run(stdio.inherit())
-  {
-    Ok(child_process.Output(status_code: 0, output: _)) -> Ok(Nil)
-    Ok(child_process.Output(status_code:, output: _)) ->
-      snag.error(
-        "Command failed with status code " <> int.to_string(status_code),
-      )
-    Error(error) -> snag.error(child_process.describe_start_error(error))
-  }
-  |> snag.context("Error running " <> command <> " " <> string.join(args, " "))
 }
 
 pub fn read_dependencies(project: Project) -> Result(List(Project), Snag) {
