@@ -8,3 +8,4 @@ erl_crash.dump
 /.claude
 CLAUDE.md
 AGENT.md
+*.crashdump
