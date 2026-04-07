@@ -30,6 +30,40 @@
  * archive was found and all /__gleepack__/ lookups return ENOENT. */
 gleepack_vfs_t g_vfs = {0};
 
+/* -- Home directory -------------------------------------------------------
+ * Copied from erts/etc/common/erlexec.c so the logic stays in sync with OTP.
+ * -home is optional: if absent the VM still boots, but applications that call
+ * init:get_argument(home) (e.g. rebar3) will fail. */
+
+#if defined(__WIN32__)
+#include <shlobj.h>
+static char *get_home(void)
+{
+    wchar_t *profile;
+    char *homedrive = getenv("HOMEDRIVE");
+    char *homepath  = getenv("HOMEPATH");
+    if (!homedrive || !homepath) {
+        if (SHGetKnownFolderPath(&FOLDERID_Profile, 0, NULL, &profile) == S_OK) {
+            /* Convert UTF-16 to UTF-8 — simplified: assume ASCII path */
+            size_t len = wcslen(profile);
+            char *buf = malloc(len + 1);
+            if (buf) wcstombs(buf, profile, len + 1);
+            CoTaskMemFree(profile);
+            return buf;
+        }
+        return NULL;
+    }
+    char *buf = malloc(strlen(homedrive) + strlen(homepath) + 1);
+    if (buf) { strcpy(buf, homedrive); strcat(buf, homepath); }
+    return buf;
+}
+#else
+static char *get_home(void)
+{
+    return getenv("HOME");
+}
+#endif
+
 /* -- Hash table callbacks --------------------------------------------------*/
 
 static void *vfs_meta_alloc(int type, size_t sz) {
@@ -431,9 +465,16 @@ main(int argc, char **argv)
         exit(1);
     }
 
-    /* Always inject -progname argv[0] -extra between the erl_args tokens and
-     * the original argv (which becomes the application's extra arguments). */
-    char *structural[] = { "-progname", argv[0], "-extra" };
+    /* Always inject -home $HOME -progname argv[0] -extra between the erl_args
+     * tokens and the original argv (which becomes the application's extra
+     * arguments).  -home is required by applications (e.g. rebar3) that call
+     * init:get_argument(home) to locate user config; the erl shell script
+     * normally supplies it but we invoke the VM directly. */
+    char *home_dir = get_home();
+    char *structural[] = {
+        "-home", (home_dir ? home_dir : "/"),
+        "-progname", argv[0], "-extra"
+    };
     int nstructural  = (int)(sizeof(structural) / sizeof(structural[0]));
 
     int new_argc = 1 + erl_argc + nstructural + argc;
