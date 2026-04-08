@@ -47,6 +47,9 @@ ELIXIR_CLONED  := $(BUILD_ROOT)/elixir-cloned
 # Path to our custom OTP's bin directory (erl, erlc, etc.)
 OTP_BIN := $(CURDIR)/$(OTP_SRC)/bin
 
+# Erlang-level patch files (compiled with built OTP's erlc, dropped into OTP ebin dirs)
+BEAM_PATCHES := $(wildcard otp/*.erl)
+
 # Single assembled toolchain directory: OTP apps + rebar3 apps + Elixir apps.
 # install rsyncs this one directory — no separate install steps.
 TOOLCHAIN_DIR       := $(BUILD_ROOT)/toolchain
@@ -71,7 +74,7 @@ CONFIGURE_FLAGS = \
 	--without-et \
 	--disable-parallel-configure
 
-.PHONY: all cli checkout patch build otp assemble install shell \
+.PHONY: all cli checkout patch patch-beams build otp assemble install shell \
         test-release test-run clean-otp \
         rebar3-checkout rebar3 elixir-checkout elixir \
         run-rebar3 run-mix run-iex
@@ -96,6 +99,18 @@ $(BUILD_ROOT)/patched: $(OTP_CLONED) otp/unix_prim_file.c otp/gleepack_vfs.h otp
 	cp otp/gleepack_vfs.h   $(OTP_SRC)/erts/emulator/sys/unix/gleepack_vfs.h
 	cp otp/sys_drivers.c    $(OTP_SRC)/erts/emulator/sys/unix/sys_drivers.c
 	touch $@
+
+# Compile Erlang-level patches and install into the OTP lib tree.
+# Each otp/*.erl file is compiled with the built OTP's erlc, then the resulting
+# .beam is copied into the correct OTP app's ebin/ directory.
+# Currently: inet_gethost_native.erl -> lib/kernel-*/ebin/
+patch-beams: $(BUILD_ROOT)/beams-patched
+$(BUILD_ROOT)/beams-patched: $(OTP_BUILT) $(BEAM_PATCHES)
+	@mkdir -p $(BUILD_ROOT)/beam-staging
+	PATH="$(OTP_BIN):$$PATH" erlc -o $(BUILD_ROOT)/beam-staging otp/inet_gethost_native.erl
+	cp $(BUILD_ROOT)/beam-staging/inet_gethost_native.beam $$(find $(OTP_SRC)/lib/kernel-*/ebin -maxdepth 0)/inet_gethost_native.beam
+	touch $@
+	@echo "Erlang patches applied -> $(OTP_SRC)/lib/kernel-*/ebin/"
 
 # Build beam.smp with -Wl,-dead_strip so the final binary is as small as possible.
 # NIF/driver API symbols are fine to strip here since everything is statically linked in.
@@ -171,7 +186,7 @@ $(BUILD_ROOT)/elixir-built: $(ELIXIR_CLONED) $(OTP_BUILT)
 # All BEAM files are stripped of debug info. This single directory is what
 # gets rsync'd by `make install` — no separate install steps.
 assemble: $(TOOLCHAIN_ASSEMBLED)
-$(TOOLCHAIN_ASSEMBLED): $(OTP_BUILT) $(REBAR3_BIN) $(BUILD_ROOT)/elixir-built
+$(TOOLCHAIN_ASSEMBLED): $(OTP_BUILT) $(REBAR3_BIN) $(BUILD_ROOT)/elixir-built $(BUILD_ROOT)/beams-patched
 	rm -rf $(TOOLCHAIN_DIR)
 	mkdir -p $(TOOLCHAIN_DIR)/lib $(TOOLCHAIN_DIR)/bin
 	@# OTP apps: only beam/app/boot/script — no src, docs, examples, native drivers
@@ -229,7 +244,7 @@ install:
 # appended to build/gleepack to produce a self-contained test binary.
 test-release: $(TEST_BINARY)
 
-$(TEST_BINARY): $(BUILD_ROOT)/gleepack $(TEST_APP_DIR)/rebar.config $(TEST_APP_DIR)/src/hello_world.erl otp/erl_inetrc $(REBAR3_BIN)
+$(TEST_BINARY): $(BUILD_ROOT)/gleepack $(TEST_APP_DIR)/rebar.config $(TEST_APP_DIR)/src/hello_world.erl otp/erl_inetrc $(REBAR3_BIN) $(BUILD_ROOT)/beams-patched
 	cd $(TEST_APP_DIR) && \
 		PATH="$(OTP_BIN):$$PATH" \
 		ERL_TOP="$(CURDIR)/$(OTP_SRC)" \
