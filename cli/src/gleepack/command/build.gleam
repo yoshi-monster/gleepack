@@ -1,6 +1,7 @@
 import child_process
 import child_process/stdio
 import filepath
+import gleam/dict
 import gleam/int
 import gleam/io
 import gleam/list
@@ -128,56 +129,62 @@ key `tools." <> config.app_name <> ".targets`.
     |> snag.context("Resolving production dependencies"),
   )
 
-  list.try_each(requested_targets, fn(runtime_target) {
-    build_for_target(
-      project:,
-      entry:,
-      out:,
-      compile_deps:,
-      dependencies:,
-      runtime_target:,
-      multi_target: list.length(requested_targets) > 1,
-    )
-  })
+  let multi_target = list.length(requested_targets) > 1
+
+  // Resolve the compile toolchain for each runtime target, then group so the
+  // release is built once per toolchain (BEAM bytecode is arch/OS agnostic).
+  use pairs <- result.try(
+    list.try_map(requested_targets, fn(runtime_target) {
+      target.matching_native(matching: runtime_target)
+      |> snag.replace_error(
+        "No native toolchain available for "
+        <> target.slug(runtime_target)
+        <> ". Cannot compile.",
+      )
+      |> result.map(fn(compile_target) { #(compile_target, runtime_target) })
+    }),
+  )
+
+  list.try_each(
+    dict.to_list(list.group(pairs, fn(pair) {
+      let #(compile_target, _) = pair
+      compile_target
+    })),
+    fn(group) {
+      let #(compile_target, runtime_pairs) = group
+      use compile_installed <- result.try(
+        target.install(compile_target)
+        |> snag.context(
+          "Installing compile toolchain " <> target.slug(compile_target),
+        ),
+      )
+      use zip <- result.try(
+        release_compiler.build(
+          project:,
+          module: entry,
+          dependencies:,
+          compile_dependencies: compile_deps,
+          target: compile_installed,
+        )
+        |> snag.context("Building release for " <> target.slug(compile_target)),
+      )
+      list.try_each(runtime_pairs, fn(pair) {
+        let #(_, runtime_target) = pair
+        stamp(zip, runtime_target, out, multi_target)
+      })
+    },
+  )
 }
 
-fn build_for_target(
-  project project: project.Project,
-  entry entry: String,
-  out out: String,
-  compile_deps compile_deps: List(project.Project),
-  dependencies dependencies: List(project.Project),
-  runtime_target runtime_target: target.Target,
-  multi_target multi_target: Bool,
+fn stamp(
+  zip: BitArray,
+  runtime_target: target.Target,
+  out: String,
+  multi_target: Bool,
 ) -> Result(Nil, Snag) {
   use runtime_installed <- result.try(
     target.install(runtime_target)
     |> snag.context("Installing runtime " <> target.slug(runtime_target)),
-  )
-
-  use compile_target <- result.try(
-    target.matching_native(matching: runtime_target)
-    |> snag.replace_error(
-      "No native toolchain available for "
-      <> target.slug(runtime_target)
-      <> ". Cannot compile.",
-    ),
-  )
-
-  use compile_installed <- result.try(
-    target.install(compile_target)
-    |> snag.context("Installing compile toolchain " <> target.slug(compile_target)),
-  )
-
-  use zip <- result.try(
-    release_compiler.build(
-      project:,
-      module: entry,
-      dependencies:,
-      compile_dependencies: compile_deps,
-      target: compile_installed,
-    )
-    |> snag.context("Building release for " <> target.slug(runtime_target)),
   )
 
   use runtime_binary <- result.try(
