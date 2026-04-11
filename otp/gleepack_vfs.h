@@ -1,5 +1,6 @@
 /* VFS types, global state, and function declarations for the gleepack in-memory
- * file system. This header is shared by gleepack_entry.c and unix_prim_file.c. */
+ * file system. This header is shared by gleepack_entry.c, unix_prim_file.c,
+ * and win_prim_file.c. */
 
 #ifndef GLEEPACK_VFS_H
 #define GLEEPACK_VFS_H
@@ -8,7 +9,7 @@
 #include <stddef.h>
 #include <sys/types.h>
 
-/* hash.h is available in both nifs/unix and sys/unix build contexts. */
+/* hash.h is available in nifs/{unix,win32} and sys/{unix,win32} build contexts. */
 #include "hash.h"
 
 /* Magic discriminator: stored in every efile_gleepack_t to distinguish gleepack
@@ -20,14 +21,14 @@
 #define GLEEPACK_PREFIX_LEN 14
 
 /* efile_gleepack_t and gleepack_is_handle() require efile_data_t from
- * prim_file_nif.h.  They are only needed in unix_prim_file.c (nifs/unix
- * build context).  The caller must #define GLEEPACK_HAVE_EFILE_DATA before
- * including this header to opt in; erl_main.c (sys/unix) does not define it
- * and therefore gets only the VFS index/lookup API. */
+ * prim_file_nif.h.  They are needed in unix_prim_file.c and win_prim_file.c
+ * (nifs/ build context).  The caller must #define GLEEPACK_HAVE_EFILE_DATA
+ * before including this header to opt in; erl_main.c (sys/) does not define
+ * it and therefore gets only the VFS index/lookup API. */
 #ifdef GLEEPACK_HAVE_EFILE_DATA
 /* In-memory file handle.  The common field MUST be first so that a pointer to
  * efile_gleepack_t can be safely cast to efile_data_t * and back (C-style
- * inheritance, matching the efile_unix_t pattern in unix_prim_file.c). */
+ * inheritance, matching the efile_unix_t / efile_win_t pattern). */
 typedef struct {
     efile_data_t   common; /* MUST be first — cast compatibility */
     uint32_t       magic;  /* == GLEEPACK_MAGIC */
@@ -82,7 +83,7 @@ const uint8_t *gleepack_vfs_get_data(gleepack_index_entry_t *entry);
 void gleepack_vfs_foreach(void (*fn)(gleepack_index_entry_t *, void *), void *arg);
 
 /* Return 1 if d is a gleepack handle (magic check), 0 otherwise.
- * Only available when GLEEPACK_HAVE_EFILE_DATA is defined (unix_prim_file.c). */
+ * Only available when GLEEPACK_HAVE_EFILE_DATA is defined. */
 #ifdef GLEEPACK_HAVE_EFILE_DATA
 static inline int gleepack_is_handle(efile_data_t *d) {
     return ((efile_gleepack_t *)d)->magic == GLEEPACK_MAGIC;
