@@ -16,11 +16,17 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <fcntl.h>
 #include <stdio.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
+
+#if defined(__WIN32__)
+#  include <windows.h>
+#  include <io.h>
+#else
+#  include <unistd.h>
+#  include <fcntl.h>
+#  include <sys/mman.h>
+#  include <sys/stat.h>
+#endif
 
 #ifdef __APPLE__
 #  include <mach-o/dyld.h>
@@ -124,6 +130,15 @@ static uint32_t le32(uint8_t *p) {
 
 /* -- Platform: locate the running executable ------------------------------ */
 
+#if defined(__WIN32__)
+static HANDLE open_self_exe_handle(void) {
+    WCHAR path[MAX_PATH];
+    DWORD len = GetModuleFileNameW(NULL, path, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return INVALID_HANDLE_VALUE;
+    return CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+}
+#else
 static int open_self_exe(void) {
 #ifdef __linux__
     return open("/proc/self/exe", O_RDONLY);
@@ -136,6 +151,7 @@ static int open_self_exe(void) {
 #  error "unsupported platform"
 #endif
 }
+#endif
 
 /* -- ZIP parsing ---------------------------------------------------------- */
 
@@ -342,6 +358,41 @@ const uint8_t *gleepack_vfs_get_data(gleepack_index_entry_t *entry) {
 }
 
 void gleepack_vfs_init(void) {
+    uint8_t *map;
+    size_t map_size;
+
+#if defined(__WIN32__)
+    HANDLE fh = open_self_exe_handle();
+    if (fh == INVALID_HANDLE_VALUE) {
+        fprintf(stderr, "gleepack: cannot open self executable\n");
+        exit(1);
+    }
+
+    LARGE_INTEGER file_size;
+    if (!GetFileSizeEx(fh, &file_size)) {
+        fprintf(stderr, "gleepack: GetFileSizeEx failed\n");
+        CloseHandle(fh);
+        exit(1);
+    }
+
+    HANDLE mapping = CreateFileMapping(fh, NULL, PAGE_READONLY, 0, 0, NULL);
+    if (!mapping) {
+        fprintf(stderr, "gleepack: CreateFileMapping failed\n");
+        CloseHandle(fh);
+        exit(1);
+    }
+
+    map = (uint8_t *)MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+    CloseHandle(mapping);
+    CloseHandle(fh); /* handles no longer needed — mapping keeps the data alive */
+
+    if (!map) {
+        fprintf(stderr, "gleepack: MapViewOfFile failed\n");
+        exit(1);
+    }
+
+    map_size = (size_t)file_size.QuadPart;
+#else
     int fd = open_self_exe();
     if (fd < 0) {
         fprintf(stderr, "gleepack: cannot open self executable\n");
@@ -354,7 +405,7 @@ void gleepack_vfs_init(void) {
         exit(1);
     }
 
-    uint8_t *map = mmap(0, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    map = mmap(0, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd); /* fd no longer needed — mmap keeps the data alive */
 
     if (map == MAP_FAILED) {
@@ -362,21 +413,28 @@ void gleepack_vfs_init(void) {
         exit(1);
     }
 
+    map_size = (size_t)st.st_size;
+#endif
+
     off_t cd_offset, archive_start;
     uint16_t num_entries;
 
-    if (!find_eocd(map, (size_t)st.st_size, &cd_offset, &num_entries, &archive_start)) {
+    if (!find_eocd(map, map_size, &cd_offset, &num_entries, &archive_start)) {
         /* No archive appended — VFS is empty; all /__gleepack__/ reads return ENOENT */
-        munmap(map, (size_t)st.st_size);
+#if defined(__WIN32__)
+        UnmapViewOfFile(map);
+#else
+        munmap(map, map_size);
+#endif
         g_vfs.zmap = NULL;
         return;
     }
 
     g_vfs.zmap = map;
-    g_vfs.zsize = (size_t)st.st_size;
+    g_vfs.zsize = map_size;
     g_vfs.archive_offset = archive_start;
 
-    parse_central_directory(map, (size_t)st.st_size, archive_start, cd_offset, num_entries);
+    parse_central_directory(map, map_size, archive_start, cd_offset, num_entries);
 }
 
 /* -- erl_args file parser ------------------------------------------------- */
@@ -421,8 +479,10 @@ static char **parse_erl_args(const uint8_t *data, size_t size, int *out_argc)
 int
 main(int argc, char **argv)
 {
+#if !defined(__WIN32__)
     /* Must be done before we have a chance to spawn any scheduler threads. */
     sys_init_signal_stack();
+#endif
 
     gleepack_vfs_init();
 
