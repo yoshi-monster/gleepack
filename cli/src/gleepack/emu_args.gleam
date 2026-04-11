@@ -16,7 +16,7 @@ pub type EmuArgs {
 }
 
 /// Default value for the `extra_emu_args` config key.
-pub const default = "+L +d +Bd +P 65536 +Q 1024 +sbtu +A0 -noshell -noinput -mode minimal"
+pub const default = "+L +d +Bd +P 65536 +Q 1024 +sbtu +A0 -noshell -noinput -mode interactive -start_epmd false -dist_listen false"
 
 type Section {
   Beam
@@ -67,9 +67,9 @@ pub fn render(args: EmuArgs) -> String {
     "/__gleepack__/bin",
     "-boot",
     "/__gleepack__/start",
-    "-kernel",
-    "inetrc",
-    "/__gleepack__/erl_inetrc",
+    "-run",
+    "gleepack_main",
+    "main",
   ]
 
   let all = list.flatten([args.beam_flags, ["--"], required, args.erlang_flags])
