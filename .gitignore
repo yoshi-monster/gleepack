@@ -9,3 +9,5 @@ erl_crash.dump
 CLAUDE.md
 AGENT.md
 *.crashdump
+/cli/gleepack
+/gleepack
