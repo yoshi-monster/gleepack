@@ -436,15 +436,17 @@ main(int argc, char **argv)
     }
 
     static const char default_erl_args[] =
-        "-L\0-d\0" "-Bd\0-sbtu\0-A0\0-P\065536\0-Q\0" "1024\0"
         "--\0"
         "-root\0/__gleepack__\0"
         "-bindir\0/__gleepack__/bin\0"
         "-boot\0/__gleepack__/start\0"
-        "-kernel\0inetrc\0\"/__gleepack__/erl_inetrc\"\0"
         "-noshell\0"
-        "-noinput\0"
-        "-mode\0minimal\0";
+        /* So we wanna use mode=minimal here, since that skips some
+         * applications in the kernel supervision tree that we don't want.
+         * We do want the inet_db however, so for that we need interactive mode
+         * which is roughly 20ms slower.
+         */
+        "-mode\0interactive\0";
 
     /* Try to load VM arguments from erl_args inside the ZIP archive.
      * The CLI writes this file so that flags are configurable without
@@ -477,7 +479,7 @@ main(int argc, char **argv)
     };
     int nstructural  = (int)(sizeof(structural) / sizeof(structural[0]));
 
-    int new_argc = 1 + erl_argc + nstructural + argc;
+    int new_argc = erl_argc + nstructural + argc;
     char **new_argv = malloc((size_t)new_argc * sizeof(char *));
     if (!new_argv) {
         fprintf(stderr, "gleepack: out of memory building argv\n");
@@ -487,7 +489,7 @@ main(int argc, char **argv)
     new_argv[0] = argv[0];
     memcpy(new_argv + 1,  erl_args, erl_argc * sizeof(char *));
     memcpy(new_argv + 1 + erl_argc, structural, nstructural * sizeof(char *));
-    memcpy(new_argv + 1 + erl_argc + nstructural, argv, argc * sizeof(char *));
+    memcpy(new_argv + 1 + erl_argc + nstructural, argv + 1, (argc - 1) * sizeof(char *));
 
     erl_start(new_argc, new_argv);
     return 0;

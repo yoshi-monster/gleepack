@@ -3,7 +3,6 @@ import gleam/dict.{type Dict}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
-import gleam/set.{type Set}
 import gleam/string
 import gleepack/config
 import gleepack/target
@@ -19,7 +18,7 @@ pub type Target {
 }
 
 pub type Project {
-  GleamProject(
+  Gleam(
     name: String,
     version: String,
     otp_app: String,
@@ -37,7 +36,7 @@ pub type Project {
     targets: List(target.Target),
     extra_emu_args: Option(String),
   )
-  Rebar3Project(
+  Rebar3(
     name: String,
     version: String,
     otp_app: String,
@@ -45,7 +44,7 @@ pub type Project {
     is_dev: Bool,
     src: String,
   )
-  MixProject(
+  Mix(
     name: String,
     version: String,
     otp_app: String,
@@ -54,6 +53,9 @@ pub type Project {
     src: String,
   )
 }
+
+pub type Manifest =
+  Dict(String, Project)
 
 pub fn read(from dir: String) -> Result(Project, Snag) {
   use file_contents <- result.try(
@@ -151,7 +153,7 @@ fn parse_project(
     |> optional,
   )
 
-  Ok(GleamProject(
+  Ok(Gleam(
     name:,
     version:,
     otp_app: name,
@@ -169,152 +171,9 @@ fn parse_project(
   ))
 }
 
-fn optional(result: Result(a, tom.GetError)) -> Result(Option(a), tom.GetError) {
-  case result {
-    Ok(value) -> Ok(Some(value))
-    Error(tom.NotFound(..)) -> Ok(None)
-    Error(tom.WrongType(..) as error) -> Error(error)
-  }
-}
+// -- MANIFEST ----------------------------------------------------------------
 
-fn or(result: Result(a, tom.GetError), default: a) -> Result(a, tom.GetError) {
-  case result {
-    Ok(_) -> result
-    Error(tom.NotFound(..)) -> Ok(default)
-    Error(tom.WrongType(..)) -> result
-  }
-}
-
-// -- DEPENDENCIES ------------------------------------------------------------
-
-type StackItem {
-  Visit(String)
-  Emit(Project)
-}
-
-pub fn read_dependencies(project: Project) -> Result(List(Project), Snag) {
-  use manifest <- result.try(read_manifest())
-
-  let stack =
-    project.dependencies
-    |> gleam_last(manifest)
-    |> list.map(Visit)
-
-  use sorted <- result.try(dependencies_loop(stack, set.new(), [], manifest))
-
-  Ok(list.reverse([project, ..sorted]))
-}
-
-// Like read_dependencies but also includes dev_dependencies, tagging
-// packages only reachable via dev deps with is_dev: True.
-pub fn read_compile_dependencies(
-  project: Project,
-) -> Result(List(Project), Snag) {
-  use manifest <- result.try(read_manifest())
-
-  // Compute prod-reachable names first.
-  let prod_stack =
-    project.dependencies |> gleam_last(manifest) |> list.map(Visit)
-  use prod_sorted <- result.try(dependencies_loop(
-    prod_stack,
-    set.new(),
-    [],
-    manifest,
-  ))
-  let prod_names =
-    [project.name, ..list.map(prod_sorted, fn(p) { p.name })]
-    |> set.from_list
-
-  // Walk all deps including dev.
-  let all_deps = case project {
-    GleamProject(dev_dependencies:, dependencies:, ..) ->
-      list.append(dependencies, dev_dependencies)
-    _ -> project.dependencies
-  }
-  let all_stack = all_deps |> gleam_last(manifest) |> list.map(Visit)
-  use all_sorted <- result.try(dependencies_loop(
-    all_stack,
-    set.new(),
-    [],
-    manifest,
-  ))
-
-  // Tag packages not reachable from prod as dev-only.
-  let tagged =
-    list.map(all_sorted, fn(dep) {
-      case set.contains(prod_names, dep.name) {
-        True -> dep
-        False -> set_is_dev(dep, True)
-      }
-    })
-
-  Ok(list.reverse([project, ..tagged]))
-}
-
-fn set_is_dev(project: Project, is_dev: Bool) -> Project {
-  case project {
-    GleamProject(..) -> GleamProject(..project, is_dev:)
-    Rebar3Project(..) -> Rebar3Project(..project, is_dev:)
-    MixProject(..) -> MixProject(..project, is_dev:)
-  }
-}
-
-// Sort a list of dependency names so non-Gleam packages come first.
-// When folded onto a stack (LIFO), Gleam packages end up on top and are
-// therefore visited first, pushing non-Gleam packages as late as possible.
-fn gleam_last(
-  names: List(String),
-  manifest: Dict(String, Project),
-) -> List(String) {
-  let is_gleam = fn(name) {
-    case dict.get(manifest, name) {
-      Ok(GleamProject(..)) -> True
-      _ -> False
-    }
-  }
-  let #(gleam, other) = list.partition(names, is_gleam)
-  list.fold(other, gleam, list.prepend)
-}
-
-fn dependencies_loop(
-  stack: List(StackItem),
-  visited: Set(String),
-  sorted: List(Project),
-  manifest: Dict(String, Project),
-) -> Result(List(Project), Snag) {
-  case stack {
-    [] -> Ok(sorted)
-
-    [Emit(dependency), ..stack] ->
-      dependencies_loop(stack, visited, [dependency, ..sorted], manifest)
-
-    [Visit(name), ..stack] -> {
-      case set.contains(visited, name) {
-        True -> dependencies_loop(stack, visited, sorted, manifest)
-        False -> {
-          use dep <- result.try(
-            dict.get(manifest, name)
-            |> snag.replace_error("Dependency not found in manifest: " <> name),
-          )
-
-          let stack =
-            dep.dependencies
-            |> gleam_last(manifest)
-            |> list.fold([Emit(dep), ..stack], fn(stack, name) {
-              case set.contains(visited, name) {
-                True -> stack
-                False -> [Visit(name), ..stack]
-              }
-            })
-
-          dependencies_loop(stack, set.insert(visited, name), sorted, manifest)
-        }
-      }
-    }
-  }
-}
-
-fn read_manifest() -> Result(Dict(String, Project), Snag) {
+pub fn manifest() -> Result(Manifest, Snag) {
   use contents <- result.try(
     simplifile.read("manifest.toml")
     |> snag.map_error(simplifile.describe_error)
@@ -369,24 +228,10 @@ fn read_manifest_package(package: Toml) -> Result(Project, Snag) {
     [] -> snag.error("build_tools should not be empty")
     [tom.String("gleam"), ..] -> read(from: src)
     [tom.String("rebar3"), ..] | [tom.String("rebar"), ..] ->
-      Ok(Rebar3Project(
-        name:,
-        version:,
-        otp_app:,
-        dependencies:,
-        is_dev: False,
-        src:,
-      ))
+      Ok(Rebar3(name:, version:, otp_app:, dependencies:, is_dev: False, src:))
 
     [tom.String("mix"), ..] ->
-      Ok(MixProject(
-        name:,
-        version:,
-        otp_app:,
-        dependencies:,
-        is_dev: False,
-        src:,
-      ))
+      Ok(Mix(name:, version:, otp_app:, dependencies:, is_dev: False, src:))
 
     [tom.String(other), ..] ->
       snag.error(
@@ -395,6 +240,24 @@ fn read_manifest_package(package: Toml) -> Result(Project, Snag) {
       )
 
     [_, ..] -> snag.error("build_tools needs to be an array of strings")
+  }
+}
+
+// -- HELPERS -----------------------------------------------------------------
+
+fn optional(result: Result(a, tom.GetError)) -> Result(Option(a), tom.GetError) {
+  case result {
+    Ok(value) -> Ok(Some(value))
+    Error(tom.NotFound(..)) -> Ok(None)
+    Error(tom.WrongType(..) as error) -> Error(error)
+  }
+}
+
+fn or(result: Result(a, tom.GetError), default: a) -> Result(a, tom.GetError) {
+  case result {
+    Ok(_) -> result
+    Error(tom.NotFound(..)) -> Ok(default)
+    Error(tom.WrongType(..)) -> result
   }
 }
 

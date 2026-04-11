@@ -13,7 +13,8 @@ pub fn patch_files_exist_test() {
 
 pub fn unix_prim_file_has_gleepack_intercept_test() {
   let assert Ok(contents) = simplifile.read("../otp/unix_prim_file.c")
-  assert string.contains(contents, "GLEEPACK: efile_open intercepted")
+  // efile_open is intercepted via GLEEPACK_PREFIX path checks
+  assert string.contains(contents, "GLEEPACK_PREFIX")
   assert string.contains(contents, "__gleepack__")
   Nil
 }
@@ -25,9 +26,10 @@ pub fn entry_point_calls_erl_start_test() {
   Nil
 }
 
-pub fn entry_point_is_passthrough_test() {
+pub fn entry_point_initialises_vfs_test() {
   let assert Ok(contents) = simplifile.read("../otp/gleepack_entry.c")
-  assert !string.contains(contents, "zip")
-  assert !string.contains(contents, "vfs")
+  // Entry point now initialises the VFS from the embedded zip archive
+  assert string.contains(contents, "vfs")
+  assert string.contains(contents, "erl_start")
   Nil
 }

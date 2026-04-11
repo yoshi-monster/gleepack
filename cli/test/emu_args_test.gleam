@@ -45,8 +45,8 @@ pub fn render_beam_and_erlang_test() {
   assert tokens(args)
     == [
       "-P", "65536", "--", "-root", "/__gleepack__", "-bindir",
-      "/__gleepack__/bin", "-boot", "/__gleepack__/start", "-kernel", "inetrc",
-      "/__gleepack__/erl_inetrc", "-noshell", "-mode", "minimal",
+      "/__gleepack__/bin", "-boot", "/__gleepack__/start", "-run",
+      "gleepack_main", "main", "-noshell", "-mode", "minimal",
     ]
 }
 
@@ -55,8 +55,7 @@ pub fn render_no_beam_flags_test() {
   assert tokens(args)
     == [
       "--", "-root", "/__gleepack__", "-bindir", "/__gleepack__/bin", "-boot",
-      "/__gleepack__/start", "-kernel", "inetrc", "/__gleepack__/erl_inetrc",
-      "-noshell",
+      "/__gleepack__/start", "-run", "gleepack_main", "main", "-noshell",
     ]
 }
 
@@ -65,8 +64,8 @@ pub fn render_no_erlang_flags_test() {
   assert tokens(args)
     == [
       "-P", "65536", "--", "-root", "/__gleepack__", "-bindir",
-      "/__gleepack__/bin", "-boot", "/__gleepack__/start", "-kernel", "inetrc",
-      "/__gleepack__/erl_inetrc",
+      "/__gleepack__/bin", "-boot", "/__gleepack__/start", "-run",
+      "gleepack_main", "main",
     ]
 }
 
@@ -76,8 +75,9 @@ pub fn render_default_test() {
     == [
       "-L", "-d", "-Bd", "-P", "65536", "-Q", "1024", "-sbtu", "-A0", "--",
       "-root", "/__gleepack__", "-bindir", "/__gleepack__/bin", "-boot",
-      "/__gleepack__/start", "-kernel", "inetrc", "/__gleepack__/erl_inetrc",
-      "-noshell", "-noinput", "-mode", "minimal",
+      "/__gleepack__/start", "-run", "gleepack_main", "main", "-noshell",
+      "-noinput", "-mode", "interactive", "-start_epmd", "false", "-dist_listen",
+      "false",
     ]
 }
 

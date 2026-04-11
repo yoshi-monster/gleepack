@@ -1,71 +1,16 @@
-%% Drop-in replacement for inet_gethost_native that uses net:getaddrinfo/getnameinfo
+%% Drop-in replacement for inet_gethost_native that uses net:getaddrinfo/getnameinfo.
+%% No port or server process is needed — lookups are performed inline.
 -module(inet_gethost_native).
 -moduledoc false.
--behaviour(supervisor_bridge).
 
-%% Supervisor bridge exports
--export([start_link/0, init/1, terminate/2]).
-
-%% Server export
--export([server_init/2, main_loop/1]).
-
-%% API exports
+-export([start_link/0]).
 -export([gethostbyname/1, gethostbyname/2, gethostbyaddr/1, control/1]).
-
-%% sys callbacks
--export([system_continue/3, system_terminate/4, system_code_change/4]).
 
 -include_lib("kernel/include/inet.hrl").
 
--define(PROCNAME_SUP, inet_gethost_native_sup).
-
-%%-----------------------------------------------------------------------
-%% Supervisor bridge
-%%-----------------------------------------------------------------------
-
--spec start_link() -> {ok, pid()} | {error, term()}.
+%% No server process needed — tell the kernel supervisor to skip us.
 start_link() ->
-    supervisor_bridge:start_link({local, ?PROCNAME_SUP}, ?MODULE, []).
-
--spec init([]) -> {ok, pid(), pid()} | {error, term()}.
-init([]) ->
-    Pid = proc_lib:start_link(?MODULE, server_init, [self(), []]),
-    {ok, Pid, Pid}.
-
--spec terminate(term(), pid()) -> ok.
-terminate(_Reason, Pid) ->
-    Pid ! stop,
-    ok.
-
-%%-----------------------------------------------------------------------
-%% Server (kept for interface parity — no port, no pool)
-%%-----------------------------------------------------------------------
-
-server_init(Starter, _Args) ->
-    case (catch register(?MODULE, self())) of
-        true ->
-            proc_lib:init_ack(Starter, {ok, self()});
-        _ ->
-            proc_lib:init_ack(Starter, {error, {already_started, whereis(?MODULE)}})
-    end,
-    receive stop -> ok end.
-
-main_loop(_State) ->
-    receive stop -> ok end.
-
-%%-----------------------------------------------------------------------
-%% sys callbacks
-%%-----------------------------------------------------------------------
-
-system_continue(_Parent, _Debug, State) ->
-    main_loop(State).
-
-system_terminate(Reason, _Parent, _Debug, _State) ->
-    exit(Reason).
-
--spec system_code_change(term(), module(), term(), term()) -> {ok, term()}.
-system_code_change(State, _Module, _OldVsn, _Extra) ->
-    {ok, State}.
+    ignore.
 
 %%-----------------------------------------------------------------------
 %% Public API
@@ -82,9 +27,9 @@ gethostbyname(Name) ->
 gethostbyname(Name, inet) when is_list(Name) ->
     case net:getaddrinfo(Name) of
         {ok, Infos} ->
-            Addrs = [maps:get(addr, maps:get(address, Entry))
+            Addrs = [maps:get(addr, maps:get(addr, Entry))
                      || Entry <- Infos,
-                        maps:get(family, maps:get(address, Entry)) =:= inet],
+                        maps:get(family, Entry) =:= inet],
             case Addrs of
                 [] -> {error, nxdomain};
                 _  ->
@@ -101,9 +46,9 @@ gethostbyname(Name, inet) when is_list(Name) ->
 gethostbyname(Name, inet6) when is_list(Name) ->
     case net:getaddrinfo(Name) of
         {ok, Infos} ->
-            Addrs = [maps:get(addr, maps:get(address, Entry))
+            Addrs = [maps:get(addr, maps:get(addr, Entry))
                      || Entry <- Infos,
-                        maps:get(family, maps:get(address, Entry)) =:= inet6],
+                        maps:get(family, Entry) =:= inet6],
             case Addrs of
                 [] -> {error, nxdomain};
                 _  ->

@@ -2,14 +2,19 @@ import child_process
 import child_process/stdio
 import filepath
 import gleam/int
+import gleam/io
 import gleam/list
 import gleam/option.{Some}
 import gleam/result
 import gleam/string
+import gleam_community/ansi
 import gleepack/config
+import gleepack/dependency
 import gleepack/project
+import gleepack/release_compiler
 import gleepack/target
 import glint.{type Command}
+import simplifile
 import snag.{type Snag}
 
 pub fn command() -> Command(Result(Nil, Snag)) {
@@ -63,148 +68,155 @@ key `tools." <> config.app_name <> ".targets`.
 
   use project <- result.try(
     project.read(".")
-    |> snag.context("Could not read project configuration"),
+    |> snag.context("Reading project configuration"),
   )
 
-  case project {
-    project.GleamProject(..) -> {
-      use Nil <- result.try(case project.target {
-        Some(project.Javascript) ->
-          snag.error(
-            config.app_name <> " does not support JavaScript target projects",
-          )
-        _ -> Ok(Nil)
-      })
-
-      let _output =
-        output(flags)
-        |> result.unwrap(
-          project.output |> option.unwrap(filepath.join("build", project.name)),
-        )
-
-      let _entry =
-        module(flags)
-        |> result.unwrap(project.module |> option.unwrap(project.name))
-
-      use _targets <- result.try(case targets(flags) {
-        Error(_) | Ok([]) ->
-          case project.targets {
-            [] ->
-              case target.default() {
-                Ok(target) -> Ok([target])
-                Error(Nil) ->
-                  snag.error(
-                    "Your platform is currently not supported. Please open an issue!",
-                  )
-              }
-            targets -> Ok(targets)
-          }
-
-        Ok(targets) ->
-          list.try_map(targets, fn(target) {
-            target.from_string(target)
-            |> snag.replace_error("Invalid target " <> string.inspect(target))
-          })
-      })
-
-      use _ <- result.try(run("gleam", in: ".", with: ["deps", "download"]))
-
-      use _compile_deps <- result.try(project.read_compile_dependencies(project))
-      use _dependencies <- result.try(project.read_dependencies(project))
-
-      // use entrypoint_source <- result.try(
-      //   entrypoint.render(project, entry)
-      //   |> snag.map_error(simplifile.describe_error)
-      //   |> snag.context("Could not render gleewrap_main.erl"),
-      // )
-
-      // use _ <- result.try(
-      //   compile.compile_all(compile.Options(
-      //     project:,
-      //     dependencies: compile_deps,
-      //     target: None,
-      //     emit_beams: True,
-      //     entrypoint: Some(entrypoint_source),
-      //   )),
-      // )
-
-      // use files <- result.try(files(dependencies))
-      // use entrypoint_beam <- result.try(
-      //   simplifile.read_bits(filepath.join(
-      //     compile.build_dir,
-      //     "gleewrap_main.beam",
-      //   ))
-      //   |> snag.map_error(simplifile.describe_error)
-      //   |> snag.context("Could not read compiled gleewrap_main.beam"),
-      // )
-      // let files = [
-      //   #(charlist.from_string("gleewrap_main.beam"), entrypoint_beam),
-      //   ..files
-      // ]
-
-      // let emu_args = "-escript main gleewrap_main"
-      // let emu_args = case project_extra_emu_args {
-      //   Some(extra_args) -> emu_args <> " " <> extra_args
-      //   None -> emu_args
-      // }
-
-      // let zip_options = [
-      //   Uncompress([
-      //     charlist.from_string(".app"),
-      //     charlist.from_string(".dll"),
-      //     charlist.from_string(".so"),
-      //     charlist.from_string(".dynlib"),
-      //   ]),
-      // ]
-
-      // let options = [
-      //   Shebang,
-      //   Comment(charlist.from_string("")),
-      //   EmuArgs(charlist.from_string(emu_args)),
-      //   Archive(files, zip_options),
-      // ]
-
-      // let result = create_escript(charlist.from_string(output), options)
-
-      // use Nil <- result.try(case result == atom.to_dynamic(atom.create("ok")) {
-      //   True -> Ok(Nil)
-      //   False ->
-      //     snag.error(string.inspect(result))
-      //     |> snag.context("Error creating escript")
-      // })
-
-      // use Nil <- result.try(
-      //   simplifile.set_permissions_octal(output, 0o755)
-      //   |> snag.map_error(simplifile.describe_error)
-      //   |> snag.context("Could not make " <> output <> " executable"),
-      // )
-
-      // let size_str = case simplifile.file_info(output) {
-      //   Ok(info) -> {
-      //     let size =
-      //       bytes1024.Bytes(int.to_float(info.size))
-      //       |> bytes1024.humanise
-      //       |> bytes1024.to_string
-
-      //     " (" <> size <> ")"
-      //   }
-      //   Error(_) -> ""
-      // }
-
-      // io.println(
-      //   ansi.pink("   gleewrap")
-      //   <> " written to "
-      //   <> ansi.bold(output)
-      //   <> ansi.dim(size_str),
-      // )
-      Ok(Nil)
-    }
-
+  use Nil <- result.try(case project {
+    project.Gleam(target: Some(project.Javascript), ..) ->
+      snag.error(config.app_name <> " does not support JavaScript target projects")
+    project.Gleam(..) -> Ok(Nil)
     _ ->
       snag.error(
         "Expected a Gleam project but found a non-Gleam project at current directory",
       )
+  })
+
+  let assert project.Gleam(..) = project
+
+  let out =
+    output(flags)
+    |> result.unwrap(
+      project.output |> option.unwrap(filepath.join("build", project.name)),
+    )
+
+  let entry =
+    module(flags)
+    |> result.unwrap(project.module |> option.unwrap(project.name))
+
+  use requested_targets <- result.try(case targets(flags) {
+    Error(_) | Ok([]) ->
+      case project.targets {
+        [] ->
+          case target.default() {
+            Ok(t) -> Ok([t])
+            Error(Nil) ->
+              snag.error(
+                "Your platform is currently not supported. Please open an issue!",
+              )
+          }
+        ts -> Ok(ts)
+      }
+    Ok(slugs) ->
+      list.try_map(slugs, fn(s) {
+        target.from_string(s)
+        |> snag.replace_error("Invalid target " <> string.inspect(s))
+      })
+  })
+
+  use _ <- result.try(run("gleam", in: ".", with: ["deps", "download"]))
+
+  use manifest <- result.try(
+    project.manifest() |> snag.context("Reading project manifest"),
+  )
+
+  use compile_deps <- result.try(
+    dependency.all(project, manifest)
+    |> snag.context("Resolving all dependencies"),
+  )
+  use dependencies <- result.try(
+    dependency.production(project, manifest)
+    |> snag.context("Resolving production dependencies"),
+  )
+
+  list.try_each(requested_targets, fn(runtime_target) {
+    build_for_target(
+      project:,
+      entry:,
+      out:,
+      compile_deps:,
+      dependencies:,
+      runtime_target:,
+      multi_target: list.length(requested_targets) > 1,
+    )
+  })
+}
+
+fn build_for_target(
+  project project: project.Project,
+  entry entry: String,
+  out out: String,
+  compile_deps compile_deps: List(project.Project),
+  dependencies dependencies: List(project.Project),
+  runtime_target runtime_target: target.Target,
+  multi_target multi_target: Bool,
+) -> Result(Nil, Snag) {
+  use runtime_installed <- result.try(
+    target.install(runtime_target)
+    |> snag.context("Installing runtime " <> target.slug(runtime_target)),
+  )
+
+  use compile_target <- result.try(
+    target.matching_native(matching: runtime_target)
+    |> snag.replace_error(
+      "No native toolchain available for "
+      <> target.slug(runtime_target)
+      <> ". Cannot compile.",
+    ),
+  )
+
+  use compile_installed <- result.try(
+    target.install(compile_target)
+    |> snag.context("Installing compile toolchain " <> target.slug(compile_target)),
+  )
+
+  use zip <- result.try(
+    release_compiler.build(
+      project:,
+      module: entry,
+      dependencies:,
+      compile_dependencies: compile_deps,
+      target: compile_installed,
+    )
+    |> snag.context("Building release for " <> target.slug(runtime_target)),
+  )
+
+  use runtime_binary <- result.try(
+    simplifile.read_bits(runtime_installed.runtime_binary)
+    |> snag.map_error(simplifile.describe_error)
+    |> snag.context("Reading runtime binary"),
+  )
+
+  let output_path = case multi_target {
+    True -> out <> "-" <> target.slug(runtime_target)
+    False -> out
   }
+
+  // Preserve the runtime binary's extension (e.g. .exe on Windows).
+  let output_path = case filepath.extension(runtime_installed.runtime_binary) {
+    Ok(ext) -> output_path <> "." <> ext
+    Error(Nil) -> output_path
+  }
+
+  use Nil <- result.try(
+    simplifile.create_directory_all(filepath.directory_name(output_path))
+    |> snag.map_error(simplifile.describe_error)
+    |> snag.context("Creating output directory"),
+  )
+
+  use Nil <- result.try(
+    simplifile.write_bits(output_path, <<runtime_binary:bits, zip:bits>>)
+    |> snag.map_error(simplifile.describe_error)
+    |> snag.context("Writing " <> output_path),
+  )
+
+  use Nil <- result.try(
+    simplifile.set_permissions_octal(output_path, 0o755)
+    |> snag.map_error(simplifile.describe_error)
+    |> snag.context("Setting executable permissions on " <> output_path),
+  )
+
+  io.println(ansi.pink("      Built ") <> output_path)
+  Ok(Nil)
 }
 
 fn run(
@@ -225,5 +237,5 @@ fn run(
       )
     Error(error) -> snag.error(child_process.describe_start_error(error))
   }
-  |> snag.context("Error running " <> command <> " " <> string.join(args, " "))
+  |> snag.context("Running " <> command <> " " <> string.join(args, " "))
 }

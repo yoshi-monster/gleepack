@@ -47,9 +47,6 @@ ELIXIR_CLONED  := $(BUILD_ROOT)/elixir-cloned
 # Path to our custom OTP's bin directory (erl, erlc, etc.)
 OTP_BIN := $(CURDIR)/$(OTP_SRC)/bin
 
-# Erlang-level patch files (compiled with built OTP's erlc, dropped into OTP ebin dirs)
-BEAM_PATCHES := $(wildcard otp/*.erl)
-
 # Single assembled toolchain directory: OTP apps + rebar3 apps + Elixir apps.
 # install rsyncs this one directory — no separate install steps.
 TOOLCHAIN_DIR       := $(BUILD_ROOT)/toolchain
@@ -74,10 +71,10 @@ CONFIGURE_FLAGS = \
 	--without-et \
 	--disable-parallel-configure
 
-.PHONY: all cli checkout patch patch-beams build otp assemble install shell \
+.PHONY: all cli checkout patch build otp assemble install shell \
         test-release test-run clean-otp \
         rebar3-checkout rebar3 elixir-checkout elixir \
-        run-rebar3 run-mix run-iex
+        run-rebar3 run-mix run-iex run-script
 
 all: cli
 
@@ -92,25 +89,15 @@ $(OTP_CLONED):
 	touch $@
 
 patch: $(BUILD_ROOT)/patched
-$(BUILD_ROOT)/patched: $(OTP_CLONED) otp/unix_prim_file.c otp/gleepack_vfs.h otp/gleepack_entry.c otp/sys_drivers.c
-	cp otp/unix_prim_file.c $(OTP_SRC)/erts/emulator/nifs/unix/unix_prim_file.c
-	cp otp/gleepack_vfs.h   $(OTP_SRC)/erts/emulator/nifs/unix/gleepack_vfs.h
-	cp otp/gleepack_entry.c $(OTP_SRC)/erts/emulator/sys/unix/erl_main.c
-	cp otp/gleepack_vfs.h   $(OTP_SRC)/erts/emulator/sys/unix/gleepack_vfs.h
-	cp otp/sys_drivers.c    $(OTP_SRC)/erts/emulator/sys/unix/sys_drivers.c
+$(BUILD_ROOT)/patched: $(OTP_CLONED) otp/unix_prim_file.c otp/gleepack_vfs.h otp/gleepack_entry.c otp/sys_drivers.c otp/inet_gethost_native.erl
+	cp otp/unix_prim_file.c          $(OTP_SRC)/erts/emulator/nifs/unix/unix_prim_file.c
+	cp otp/gleepack_vfs.h            $(OTP_SRC)/erts/emulator/nifs/unix/gleepack_vfs.h
+	cp otp/gleepack_entry.c          $(OTP_SRC)/erts/emulator/sys/unix/erl_main.c
+	cp otp/gleepack_vfs.h            $(OTP_SRC)/erts/emulator/sys/unix/gleepack_vfs.h
+	cp otp/sys_drivers.c             $(OTP_SRC)/erts/emulator/sys/unix/sys_drivers.c
+	cp otp/inet_gethost_native.erl   $(OTP_SRC)/lib/kernel/src/inet_gethost_native.erl
 	touch $@
 
-# Compile Erlang-level patches and install into the OTP lib tree.
-# Each otp/*.erl file is compiled with the built OTP's erlc, then the resulting
-# .beam is copied into the correct OTP app's ebin/ directory.
-# Currently: inet_gethost_native.erl -> lib/kernel-*/ebin/
-patch-beams: $(BUILD_ROOT)/beams-patched
-$(BUILD_ROOT)/beams-patched: $(OTP_BUILT) $(BEAM_PATCHES)
-	@mkdir -p $(BUILD_ROOT)/beam-staging
-	PATH="$(OTP_BIN):$$PATH" erlc -o $(BUILD_ROOT)/beam-staging otp/inet_gethost_native.erl
-	cp $(BUILD_ROOT)/beam-staging/inet_gethost_native.beam $$(find $(OTP_SRC)/lib/kernel-*/ebin -maxdepth 0)/inet_gethost_native.beam
-	touch $@
-	@echo "Erlang patches applied -> $(OTP_SRC)/lib/kernel-*/ebin/"
 
 # Build beam.smp with -Wl,-dead_strip so the final binary is as small as possible.
 # NIF/driver API symbols are fine to strip here since everything is statically linked in.
@@ -131,7 +118,7 @@ $(BUILD_ROOT)/gleepack: $(BUILD_ROOT)/patched
 # Depends on build so that the dead-stripped gleepack binary is already copied
 # before this configure overwrites the source tree's configuration.
 otp: $(OTP_BUILT)
-$(OTP_BUILT): $(BUILD_ROOT)/gleepack
+$(OTP_BUILT):
 	cd $(OTP_SRC) && \
 		LIBS="$(OPENSSL_PREFIX)/lib/libcrypto.a" \
 		./configure $(CONFIGURE_FLAGS)
@@ -186,7 +173,7 @@ $(BUILD_ROOT)/elixir-built: $(ELIXIR_CLONED) $(OTP_BUILT)
 # All BEAM files are stripped of debug info. This single directory is what
 # gets rsync'd by `make install` — no separate install steps.
 assemble: $(TOOLCHAIN_ASSEMBLED)
-$(TOOLCHAIN_ASSEMBLED): $(OTP_BUILT) $(REBAR3_BIN) $(BUILD_ROOT)/elixir-built $(BUILD_ROOT)/beams-patched
+$(TOOLCHAIN_ASSEMBLED): $(OTP_BUILT) $(REBAR3_BIN) $(BUILD_ROOT)/elixir-built
 	rm -rf $(TOOLCHAIN_DIR)
 	mkdir -p $(TOOLCHAIN_DIR)/lib $(TOOLCHAIN_DIR)/bin
 	@# OTP apps: only beam/app/boot/script — no src, docs, examples, native drivers
@@ -196,10 +183,11 @@ $(TOOLCHAIN_ASSEMBLED): $(OTP_BUILT) $(REBAR3_BIN) $(BUILD_ROOT)/elixir-built $(
 	  --include='*.app' \
 	  --include='*.script' \
 	  --include='*.boot' \
+	  --include="*.hrl" \
 	  --exclude='*' \
 	  $(OTP_SRC)/lib/ $(TOOLCHAIN_DIR)/lib/
 	@# start_clean.boot — needed to boot the VM without any specific application
-	cp $(OTP_SRC)/bin/start_clean.boot $(TOOLCHAIN_DIR)/bin/
+	cp $(OTP_SRC)/bin/no_dot_erlang.boot $(TOOLCHAIN_DIR)/start.boot
 	@# rebar3 apps from _build/prod/lib/ — beam/app/priv only
 	@for app_dir in $(REBAR3_SRC)/_build/prod/lib/*; do \
 	  app_name=$$(basename $$app_dir); \
@@ -242,9 +230,7 @@ install:
 
 # Build the test hello_world release using rebar3, then package it as a ZIP
 # appended to build/gleepack to produce a self-contained test binary.
-test-release: $(TEST_BINARY)
-
-$(TEST_BINARY): $(BUILD_ROOT)/gleepack $(TEST_APP_DIR)/rebar.config $(TEST_APP_DIR)/src/hello_world.erl otp/erl_inetrc $(REBAR3_BIN) $(BUILD_ROOT)/beams-patched
+test-release:
 	cd $(TEST_APP_DIR) && \
 		PATH="$(OTP_BIN):$$PATH" \
 		ERL_TOP="$(CURDIR)/$(OTP_SRC)" \
@@ -252,20 +238,19 @@ $(TEST_BINARY): $(BUILD_ROOT)/gleepack $(TEST_APP_DIR)/rebar.config $(TEST_APP_D
 	chmod -R u+w "$(CURDIR)/$(TEST_REL_DIR)"
 	PATH="$(OTP_BIN):$$PATH" erl -noshell -eval \
 		 'beam_lib:strip_release("$(CURDIR)/$(TEST_REL_DIR)"), \
-		 Others = filelib:wildcard("$(CURDIR)/$(TEST_REL_DIR)/lib/**/*.{c,h,erl,hrl,src,so}"), \
+		 Others = filelib:wildcard("$(CURDIR)/$(TEST_REL_DIR)/lib/**/*.{c,h,erl,hrl,src,so,a,o,d,in,asn1db,yrl,cocci}") \
+			++ filelib:wildcard("$(CURDIR)/$(TEST_REL_DIR)/lib/**/Makefile"), \
 		 lists:foreach(fun file:delete/1, Others), \
 		 Dirs = lists:reverse(lists:sort(filelib:wildcard("$(CURDIR)/$(TEST_REL_DIR)/lib/**/"))), \
 		 lists:foreach(fun(D) -> file:del_dir(D) end, Dirs), \
 		 erlang:halt(0).'
-	cp otp/erl_inetrc $(TEST_REL_DIR)/erl_inetrc
 	mv $(TEST_REL_DIR)/releases/1.0.0/start.boot $(TEST_REL_DIR)
 	rm -fr $(TEST_REL_DIR)/releases
 	rm -f $(BUILD_ROOT)/test-release.zip
-	cd $(TEST_REL_DIR) && zip -qr $(CURDIR)/$(BUILD_ROOT)/test-release.zip lib erl_inetrc start.boot
-	cp $(BUILD_ROOT)/gleepack $@
-	cat $(BUILD_ROOT)/test-release.zip >> $@
-	chmod +x $@
-	@echo "Built: $@"
+	cd $(TEST_REL_DIR) && zip -qr $(CURDIR)/$(BUILD_ROOT)/test-release.zip lib start.boot
+	cp $(BUILD_ROOT)/gleepack $(TEST_BINARY)
+	cat $(BUILD_ROOT)/test-release.zip >> $(TEST_BINARY)
+	chmod +x $(TEST_BINARY)
 	@echo "Run with: make test-run"
 
 test-run: $(TEST_BINARY)
@@ -280,7 +265,7 @@ run-rebar3:
 	    -home $(HOME) \
 	    -boot $(CURDIR)/$(TOOLCHAIN_DIR)/bin/start_clean \
 		-noshell \
-	    -eval 'rebar3:main(init:get_plain_arguments()), erlang:halt(0).' \
+	    -s rebar3 main \
 	    -extra $(ARGS)
 
 # Usage: make run-mix ARGS="new app my_app"
@@ -306,6 +291,22 @@ run-iex:
 	    -user elixir \
 	    -elixir ansi_enabled true \
 		-extra --no-halt
+
+# Usage: make run-script ERL_FILE=path/to/file.erl
+run-script:
+	$(CURDIR)/$(BUILD_ROOT)/gleepack \
+	    -L -d -Bd -sbtu -A0 \
+	    -P 65536 \
+	    -Q 1024 \
+	    -- \
+	    -root $(CURDIR)/$(TOOLCHAIN_DIR) \
+	    -bindir $(CURDIR)/$(TOOLCHAIN_DIR) \
+	    -home $(HOME) \
+	    -boot $(CURDIR)/$(TOOLCHAIN_DIR)/bin/start_clean \
+	    -noshell \
+	    -run escript start \
+	    -extra \
+	    $(ERL_FILE)
 
 clean-otp:
 	rm -rf $(BUILD_ROOT)/*
