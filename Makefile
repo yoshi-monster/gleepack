@@ -52,14 +52,15 @@ OTP_BIN := $(CURDIR)/$(OTP_SRC)/bin
 TOOLCHAIN_DIR       := $(BUILD_ROOT)/toolchain
 TOOLCHAIN_ASSEMBLED := $(BUILD_ROOT)/toolchain-assembled
 
-# TODO: Figure out what do to for real here.
-OPENSSL_PREFIX := $(shell brew --prefix openssl@3 2>/dev/null || brew --prefix openssl 2>/dev/null)
+# LibreSSL is ~5x smaller than OpenSSL after dead-stripping (592 KB vs 2.9 MB).
+# See docs/binary-size-analysis.md for the full comparison.
+SSL_PREFIX := $(shell brew --prefix libressl 2>/dev/null || brew --prefix openssl@3 2>/dev/null || brew --prefix openssl 2>/dev/null)
 
 CONFIGURE_FLAGS = \
 	--enable-jit \
 	--with-termcap \
 	--without-javac \
-	--with-ssl=$(OPENSSL_PREFIX) \
+	--with-ssl=$(SSL_PREFIX) \
 	--disable-dynamic-ssl-lib \
 	--enable-static-nifs \
 	--enable-static-drivers \
@@ -89,24 +90,36 @@ $(OTP_CLONED):
 	touch $@
 
 patch: $(BUILD_ROOT)/patched
-$(BUILD_ROOT)/patched: $(OTP_CLONED) otp/unix_prim_file.c otp/gleepack_vfs.h otp/gleepack_entry.c otp/sys_drivers.c otp/inet_gethost_native.erl
+$(BUILD_ROOT)/patched: $(OTP_CLONED) otp/unix_prim_file.c otp/win_prim_file.c otp/gleepack_vfs.h otp/gleepack_entry.c otp/sys_drivers.c otp/inet_gethost_native.erl
 	cp otp/unix_prim_file.c          $(OTP_SRC)/erts/emulator/nifs/unix/unix_prim_file.c
 	cp otp/gleepack_vfs.h            $(OTP_SRC)/erts/emulator/nifs/unix/gleepack_vfs.h
 	cp otp/gleepack_entry.c          $(OTP_SRC)/erts/emulator/sys/unix/erl_main.c
 	cp otp/gleepack_vfs.h            $(OTP_SRC)/erts/emulator/sys/unix/gleepack_vfs.h
 	cp otp/sys_drivers.c             $(OTP_SRC)/erts/emulator/sys/unix/sys_drivers.c
 	cp otp/inet_gethost_native.erl   $(OTP_SRC)/lib/kernel/src/inet_gethost_native.erl
+	cp otp/win_prim_file.c           $(OTP_SRC)/erts/emulator/nifs/win32/win_prim_file.c
+	cp otp/gleepack_vfs.h            $(OTP_SRC)/erts/emulator/nifs/win32/gleepack_vfs.h
+	cp otp/gleepack_entry.c          $(OTP_SRC)/erts/emulator/sys/win32/erl_main.c
+	cp otp/gleepack_vfs.h            $(OTP_SRC)/erts/emulator/sys/win32/gleepack_vfs.h
 	touch $@
 
 
 # Build beam.smp with -Wl,-dead_strip so the final binary is as small as possible.
 # NIF/driver API symbols are fine to strip here since everything is statically linked in.
+#
+# Two-pass build: the emulator must be linked first (without dead_strip) so that
+# enif_* exports are available for the crypto NIF's crypto_callback.so side-build.
+# Then the crypto NIF is compiled against the SSL headers, producing crypto.a.
+# Finally, the emulator is re-linked with dead_strip, pulling crypto.a + libcrypto.a in.
 build: $(BUILD_ROOT)/gleepack
 $(BUILD_ROOT)/gleepack: $(BUILD_ROOT)/patched
 	cd $(OTP_SRC) && \
-		LIBS="$(OPENSSL_PREFIX)/lib/libcrypto.a" \
+		LIBS="$(SSL_PREFIX)/lib/libcrypto.a" \
 		LDFLAGS="-Wl,-dead_strip" \
 		./configure $(CONFIGURE_FLAGS)
+	ERL_TOP=$(CURDIR)/$(OTP_SRC) $(MAKE) -j$(JOBS) -C $(OTP_SRC)/erts/emulator TYPE=opt
+	ERL_TOP=$(CURDIR)/$(OTP_SRC) $(MAKE) -j$(JOBS) -C $(OTP_SRC)/lib/crypto/c_src TYPE=opt
+	rm -f $(OTP_SRC)/bin/aarch64-apple-darwin24.6.0/beam.jit $(OTP_SRC)/bin/aarch64-apple-darwin24.6.0/beam.smp
 	ERL_TOP=$(CURDIR)/$(OTP_SRC) $(MAKE) -j$(JOBS) -C $(OTP_SRC)/erts/emulator TYPE=opt
 	BEAM=$$(find $(OTP_SRC)/bin -name beam.smp -type f | head -1) && \
 	 strip $$BEAM && \
@@ -120,7 +133,7 @@ $(BUILD_ROOT)/gleepack: $(BUILD_ROOT)/patched
 otp: $(OTP_BUILT)
 $(OTP_BUILT):
 	cd $(OTP_SRC) && \
-		LIBS="$(OPENSSL_PREFIX)/lib/libcrypto.a" \
+		LIBS="$(SSL_PREFIX)/lib/libcrypto.a" \
 		./configure $(CONFIGURE_FLAGS)
 	ERL_TOP=$(CURDIR)/$(OTP_SRC) $(MAKE) -j$(JOBS) -k -C $(OTP_SRC) TYPE=opt || true
 	touch $@

@@ -1,0 +1,32 @@
+name: Check for new OTP releases
+
+on:
+  schedule:
+    - cron: "23 */12 * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check for new OTP releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --tags
+          releases=$(gh release list --exclude-drafts --exclude-pre-releases \
+            -R erlang/otp --limit 3 | cut -f 3)
+
+          for release in $releases; do
+            if ! git rev-parse "$release" -- >/dev/null 2>&1; then
+              echo "Triggering new release $release"
+              gh workflow run build.yml \
+                -f otp_version="${release#OTP-}" \
+                --repo ${{ github.repository }}
+            else
+              echo "Release $release already exists, skipping"
+            fi
+          done
