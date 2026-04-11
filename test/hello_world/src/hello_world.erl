@@ -13,10 +13,10 @@ start(_Type, _Args) ->
 main(_) -> main().
 
 main() ->
+    io:put_chars("Hello, world\n"),
     application:ensure_all_started([inets, ssl]),
     % inet_db:start_link(),
-    % erlang:display(inet_gethost_native:gethostbyname("gleam.run", inet)),
-    % erlang:display(inet:gethostbyname("gleam.run", inet)),
+    erlang:display(inet:gethostbyname("gleam.run", inet)),
     {ok, {_, _, Body}} = httpc:request("https://gleam.run"),
     io:put_chars(Body),
     erlang:halt(0).

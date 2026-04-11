@@ -10,7 +10,18 @@
 #include "erl_vm.h"
 #include "global.h"
 #include "hash.h"
+/* Workaround: zlib.h -> zconf.h uses #if HAVE_STDARG_H-0 which triggers
+ * -Werror=undef when the macro is not defined. OTP's configure doesn't check
+ * for stdarg.h in ERTS, so we define it here, mirroring erl_zlib.h. */
+#ifndef HAVE_STDARG_H
+#  define HAVE_STDARG_H 0
+#  define HAVE_STDARG_H__UNDEF
+#endif
 #include "zlib.h"
+#ifdef HAVE_STDARG_H__UNDEF
+#  undef HAVE_STDARG_H
+#  undef HAVE_STDARG_H__UNDEF
+#endif
 
 #include "gleepack_vfs.h"
 

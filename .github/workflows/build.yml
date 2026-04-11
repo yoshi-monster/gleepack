@@ -1,0 +1,204 @@
+name: Build gleepack
+
+on:
+  push:
+    tags:
+      - "OTP-*"
+  workflow_dispatch:
+    inputs:
+      otp_version:
+        description: OTP version to build (e.g. 28.4.2)
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Extract version from tag or input ──────────────────────────────────────
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      otp_version: ${{ steps.version.outputs.otp_version }}
+    steps:
+      - name: Extract OTP version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "otp_version=${GITHUB_REF#refs/tags/OTP-}" >> $GITHUB_OUTPUT
+          else
+            echo "otp_version=${{ inputs.otp_version }}" >> $GITHUB_OUTPUT
+          fi
+          cat $GITHUB_OUTPUT
+
+  # ── Create the GitHub release before parallel jobs try to upload ───────────
+  create-release:
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Create release
+        run: |
+          gh release create "OTP-${{ needs.version.outputs.otp_version }}" \
+            --title "OTP ${{ needs.version.outputs.otp_version }}" \
+            --notes "gleepack binaries for Erlang/OTP ${{ needs.version.outputs.otp_version }}" \
+            --repo ${{ github.repository }} || true
+
+  # ── OTP toolchain (Alpine, platform-independent BEAM + rebar3 + Elixir) ───
+  toolchain:
+    needs: [version, create-release]
+    runs-on: ubuntu-latest
+    container:
+      image: alpine:3.22
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OTP_VERSION: ${{ needs.version.outputs.otp_version }}
+
+    steps:
+      - name: Checkout repository
+        run: |
+          apk add --no-cache git
+          git clone --depth=1 \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            "$GITHUB_WORKSPACE"
+
+      - name: Build toolchain
+        env:
+          REBAR3_VERSION: "3.24.0"
+          ELIXIR_VERSION: "1.18.3"
+        run: |
+          chmod +x scripts/build-toolchain.sh
+          scripts/build-toolchain.sh
+
+      - name: Package toolchain
+        run: |
+          cd /tmp/toolchain
+          zip -qr "/tmp/otp-${OTP_VERSION}.zip" .
+
+      - name: Upload toolchain to release
+        run: |
+          apk add --no-cache github-cli
+          gh release upload "OTP-${OTP_VERSION}" \
+            "/tmp/otp-${OTP_VERSION}.zip" \
+            --repo ${{ github.repository }} \
+            --clobber
+
+  # ── gleepack runtime — Linux (Alpine, static) ─────────────────────────────
+  runtime-linux:
+    needs: [version, create-release]
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    container:
+      image: alpine:3.22
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OTP_VERSION: ${{ needs.version.outputs.otp_version }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, aarch64]
+
+    steps:
+      - name: Checkout repository
+        run: |
+          apk add --no-cache git
+          git clone --depth=1 \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            "$GITHUB_WORKSPACE"
+
+      - name: Build runtime
+        run: |
+          chmod +x scripts/build-runtime-linux.sh
+          scripts/build-runtime-linux.sh
+
+      - name: Package runtime
+        run: |
+          cd /tmp
+          zip "gleepack-${{ matrix.arch }}-linux-otp-${OTP_VERSION}.zip" gleepack
+
+      - name: Upload runtime to release
+        run: |
+          apk add --no-cache github-cli
+          gh release upload "OTP-${OTP_VERSION}" \
+            "/tmp/gleepack-${{ matrix.arch }}-linux-otp-${OTP_VERSION}.zip" \
+            --repo ${{ github.repository }} \
+            --clobber
+
+  # ── gleepack runtime — macOS (Apple Silicon only) ─────────────────────────
+  runtime-macos:
+    needs: [version, create-release]
+    runs-on: macos-15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OTP_VERSION: ${{ needs.version.outputs.otp_version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build runtime
+        run: |
+          chmod +x scripts/build-runtime-macos.sh
+          scripts/build-runtime-macos.sh
+
+      - name: Package and upload
+        run: |
+          cd /tmp
+          zip "gleepack-aarch64-macos-otp-${OTP_VERSION}.zip" gleepack
+          gh release upload "OTP-${OTP_VERSION}" \
+            "/tmp/gleepack-aarch64-macos-otp-${OTP_VERSION}.zip" \
+            --repo ${{ github.repository }} \
+            --clobber
+
+  # ── gleepack runtime — Windows (WSL + MSVC via otp_build) ────────────────
+  runtime-windows:
+    needs: [version, create-release]
+    runs-on: windows-2025  # ARM64 target is cross-compiled via otp_build env_win32 arm64
+    defaults:
+      run:
+        shell: wsl-bash {0}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OTP_VERSION: ${{ needs.version.outputs.otp_version }}
+      WSLENV: OTP_VERSION:GH_TOKEN
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            otp_arch: x64
+
+    steps:
+      - name: Set up WSL
+        uses: Vampire/setup-wsl@v6
+        with:
+          distribution: Ubuntu-24.04
+
+      - name: Install WSL dependencies
+        run: sudo apt-get update && sudo apt-get install -y make autoconf curl zip
+
+      - name: Install LibreSSL (static)
+        shell: cmd
+        run: vcpkg install libressl:${{ matrix.arch == 'aarch64' && 'arm64' || 'x64' }}-windows-static
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build runtime
+        env:
+          OTP_ARCH: ${{ matrix.otp_arch }}
+          WSLENV: OTP_VERSION:GH_TOKEN:OTP_ARCH:GITHUB_WORKSPACE/p:VCPKG_INSTALLATION_ROOT/p
+        run: |
+          chmod +x "$GITHUB_WORKSPACE/scripts/build-runtime-windows.sh"
+          "$GITHUB_WORKSPACE/scripts/build-runtime-windows.sh" "$GITHUB_WORKSPACE"
+
+      - name: Package and upload
+        run: |
+          cd /mnt/c/gleepack
+          zip "gleepack-${{ matrix.arch }}-windows-otp-${OTP_VERSION}.zip" gleepack.exe
+          gh release upload "OTP-${OTP_VERSION}" \
+            "/mnt/c/gleepack/gleepack-${{ matrix.arch }}-windows-otp-${OTP_VERSION}.zip" \
+            --repo ${{ github.repository }} \
+            --clobber
