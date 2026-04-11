@@ -7,6 +7,7 @@ import directories
 import filepath
 import gleam/bool
 import gleam/deque.{type Deque as Queue} as queue
+import gleam/dict.{type Dict}
 import gleam/erlang/process
 import gleam/int
 import gleam/io
@@ -33,6 +34,8 @@ type LoopState {
   LoopState(
     target: InstalledTarget,
     compiler: BeamCompiler,
+    // Maps package name -> otp_app for resolving .app dependencies.
+    otp_apps: Dict(String, String),
     remaining: List(Project),
     in_flight: Option(#(Project, Process)),
     // Packages whose .erl files are queued in the beam compiler:
@@ -56,10 +59,16 @@ pub fn compile(
     |> snag.context("Creating " <> config.build_dir),
   )
 
+  let otp_apps =
+    list.fold(dependencies, dict.new(), fn(acc, p) {
+      dict.insert(acc, p.name, p.otp_app)
+    })
+
   let state =
     LoopState(
       target:,
       compiler:,
+      otp_apps:,
       remaining: dependencies,
       in_flight: None,
       pending: queue.new(),
@@ -194,7 +203,13 @@ fn on_compile_finished(
           filepath.strip_extension(filepath.base_name(src))
         })
       let applications =
-        list.flatten([["kernel", "stdlib"], extra_applications, dependencies])
+        list.flatten([
+          ["kernel", "stdlib"],
+          extra_applications,
+          list.map(dependencies, fn(dep) {
+            dict.get(state.otp_apps, dep) |> result.unwrap(dep)
+          }),
+        ])
         |> list.unique
       let app =
         app_file.AppFile(
