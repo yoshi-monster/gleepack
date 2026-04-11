@@ -59,6 +59,11 @@ pub fn start(target: InstalledTarget) -> Result(BeamCompiler, Snag) {
 
 fn extract_compiler_script(dest: String) -> Result(Nil, Snag) {
   let src = filepath.join(config.priv_dir(), "gleepack_compiler.erl")
+  use _ <- result.try(
+    simplifile.create_directory_all(config.build_dir)
+    |> snag.map_error(simplifile.describe_error)
+    |> snag.context("Creating " <> config.build_dir),
+  )
   use content <- result.try(
     simplifile.read_bits(src)
     |> snag.map_error(simplifile.describe_error)
