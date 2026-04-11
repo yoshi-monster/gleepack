@@ -19,10 +19,10 @@ run(Module) ->
     receive
         {'EXIT', Pid, {Reason, [First | _] = StackTrace}} when is_tuple(First) ->
             print_error_with_stacktrace(exit, Reason, StackTrace),
-            init:stop(1);
+            stop(1);
         {'EXIT', Pid, Reason} when Reason =/= normal ->
             print_error(exit, Reason),
-            init:stop(1)
+            stop(1)
     end.
 
 run_module(Module) ->
@@ -30,12 +30,15 @@ run_module(Module) ->
         {ok, _} = application:ensure_all_started(?APP),
         erlang:process_flag(trap_exit, false),
         Module:main(),
-        init:stop(0)
+        stop(0)
     catch
         Class:Reason:StackTrace ->
             print_error_with_stacktrace(Class, Reason, StackTrace),
-            init:stop(1)
+            stop(1)
     end.
+
+stop(ExitCode) ->
+    erlang:halt(ExitCode).
 
 -define(red, "\e[31;1m").
 -define(grey, "\e[90m").
@@ -99,7 +102,8 @@ error_message({case_clause, _}) ->
 error_message({badmatch, _}) ->
     <<"An Erlang assignment pattern did not match."/utf8>>;
 error_message(function_clause) ->
-    <<"No Erlang function clause matched the arguments it was called with."/utf8>>;
+    <<"No Erlang function clause matched the arguments it was called "
+      "with."/utf8>>;
 error_message(_) ->
     <<"An error occurred outside of Gleam."/utf8>>.
 
