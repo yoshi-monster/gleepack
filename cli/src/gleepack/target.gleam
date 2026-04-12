@@ -1,5 +1,10 @@
 import filepath
+import gleam/bit_array
 import gleam/bool
+import gleam/crypto
+import gleam/http/request
+import gleam/httpc
+import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -7,20 +12,10 @@ import gleam/result
 import gleam/string
 import gleam_community/ansi
 import gleepack/config
+import gleepack/zip
 import platform
 import simplifile
 import snag.{type Snag}
-
-pub const targets = [
-  Target(
-    arch: platform.Arm64,
-    os: platform.Darwin,
-    otp_version: "28.4.1",
-    extra: None,
-    erts_hash: "TODO",
-    otp_hash: "TODO",
-  ),
-]
 
 pub opaque type Target {
   Target(
@@ -28,10 +23,55 @@ pub opaque type Target {
     os: platform.Os,
     otp_version: String,
     extra: Option(String),
-    erts_hash: String,
+    runtime_link: String,
+    runtime_hash: String,
+    otp_link: String,
     otp_hash: String,
   )
 }
+
+pub const targets = [
+  Target(
+    arch: platform.Arm64,
+    os: platform.Linux,
+    otp_version: "28.4.2",
+    extra: None,
+    runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-aarch64-linux-otp-28.4.2.zip",
+    runtime_hash: "sha256:0f6e4d427d5e4ad246f6f9493ef05156d96e1d371eca8d5e6ea7a5a4929fbf65",
+    otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
+    otp_hash: "sha256:acf46c70d474b21ef558158922530dd28dff25d4309ac9a78bb467922ec06ed6",
+  ),
+  Target(
+    arch: platform.X64,
+    os: platform.Linux,
+    otp_version: "28.4.2",
+    extra: None,
+    runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-amd64-linux-otp-28.4.2.zip",
+    runtime_hash: "sha256:ab5b7dfa27345acb6f28ad61e6b702ec96e3968ac2115d04afb45db2a480a99f",
+    otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
+    otp_hash: "sha256:acf46c70d474b21ef558158922530dd28dff25d4309ac9a78bb467922ec06ed6",
+  ),
+  Target(
+    arch: platform.Arm64,
+    os: platform.Darwin,
+    otp_version: "28.4.2",
+    extra: None,
+    runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-aarch64-macos-otp-28.4.2.zip",
+    runtime_hash: "sha256:b23c1706e8f39d86e07e61c76509131ec157122108bd7b396b79890405acdf0b",
+    otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
+    otp_hash: "sha256:acf46c70d474b21ef558158922530dd28dff25d4309ac9a78bb467922ec06ed6",
+  ),
+  Target(
+    arch: platform.X64,
+    os: platform.Win32,
+    otp_version: "28.4.2",
+    extra: None,
+    runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-amd64-windows-otp-28.4.2.zip",
+    runtime_hash: "sha256:b26984f987dfa9b682102c26329c0a389c1f6faa7f6c574ae4f2761600343999",
+    otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
+    otp_hash: "sha256:acf46c70d474b21ef558158922530dd28dff25d4309ac9a78bb467922ec06ed6",
+  ),
+]
 
 pub fn default() -> Result(Target, Nil) {
   let arch = platform.arch()
@@ -165,37 +205,91 @@ pub fn uninstall(target: Target) -> Result(Nil, Snag) {
 }
 
 fn install_runtime(cache_dir: String, target: Target) -> Result(String, Snag) {
-  let runtime_path = runtime_binary_path(cache_dir, target)
+  let Target(runtime_link: link, runtime_hash: hash, ..) = target
+  let path = filepath.directory_name(runtime_binary_path(cache_dir, target))
+  let target_dir = filepath.directory_name(path)
 
+  use Nil <- result.try({
+    download("gleepack " <> slug(target), target_dir, link, hash)
+  })
+
+  Ok(path)
+}
+
+fn install_otp(cache_dir: String, target: Target) -> Result(String, Snag) {
+  let Target(otp_version: vsn, otp_link: link, otp_hash: hash, ..) = target
+  let path = otp_dir_path(cache_dir, target)
+
+  use Nil <- result.try(download("OTP " <> vsn, path, link, hash))
+
+  Ok(path)
+}
+
+fn download(label, target_dir, link, hash) {
   use Nil <- result.try(
-    simplifile.create_directory_all(filepath.directory_name(runtime_path))
+    simplifile.create_directory_all(target_dir)
     |> snag.map_error(simplifile.describe_error),
   )
 
   use <- bool.guard(
-    when: simplifile.is_file(runtime_path) == Ok(True),
-    return: Ok(runtime_path),
+    when: simplifile.is_directory(target_dir) == Ok(True),
+    return: Ok(Nil),
   )
 
-  io.println(
-    ansi.pink("Downloading") <> " " <> config.app_name <> " " <> slug(target),
+  io.println(ansi.pink("Downloading") <> " " <> label)
+
+  let assert Ok(request) =
+    request.to(link) |> result.map(request.set_body(_, <<>>))
+
+  use response <- result.try(
+    httpc.configure()
+    |> httpc.timeout(5 * 60 * 1000)
+    |> httpc.dispatch_bits(request)
+    |> snag.map_error(error_to_string)
+    |> snag.context("Downloading " <> link),
   )
 
-  panic as "todo"
-  //
+  use Nil <- result.try(
+    validate_hash(response.body, hash)
+    |> snag.context("Verifying hash"),
+  )
+
+  use _ <- result.try(
+    zip.extract_to_disk(response.body, target_dir)
+    |> snag.map_error(zip.describe_error)
+    |> snag.context("Extracting archive"),
+  )
+
+  io.println(ansi.pink(" Downloaded") <> " " <> label)
+
+  Ok(Nil)
 }
 
-fn install_otp(cache_dir: String, target: Target) -> Result(String, Snag) {
-  let otp_path = otp_dir_path(cache_dir, target)
+fn validate_hash(body: BitArray, hash: String) -> Result(Nil, Snag) {
+  case hash {
+    "sha256:" <> hex -> do_validate_hash(crypto.Sha256, body, hex)
+    _ -> snag.error("Unsupported hash type: " <> hash)
+  }
+}
 
-  use <- bool.guard(
-    when: simplifile.is_directory(otp_path) == Ok(True),
-    return: Ok(otp_path),
+fn do_validate_hash(hash_algorithm, body, hex) {
+  use expected <- result.try(
+    bit_array.base16_decode(hex)
+    |> snag.replace_error("Invalid expected hash: " <> hex),
   )
 
-  io.println(ansi.pink("Downloading") <> " OTP " <> target.otp_version)
+  let actual = crypto.hash(hash_algorithm, body)
 
-  panic as "todo"
+  case crypto.secure_compare(expected, actual) {
+    True -> Ok(Nil)
+    False ->
+      snag.error(
+        "Hash mismatch: Expected "
+        <> hex
+        <> ", got "
+        <> bit_array.base16_encode(actual),
+      )
+  }
 }
 
 fn runtime_dir_path(cache_dir: String, target: Target) -> String {
@@ -216,4 +310,21 @@ fn otp_dir_path(cache_dir: String, target: Target) -> String {
   cache_dir
   |> filepath.join("otp")
   |> filepath.join(target.otp_version)
+}
+
+fn error_to_string(error: httpc.HttpError) -> String {
+  case error {
+    httpc.InvalidUtf8Response -> "Invalid utf-8 body"
+    httpc.FailedToConnect(ip4:, ip6: _) ->
+      "Failed to connect: " <> connect_error_to_string(ip4)
+    httpc.ResponseTimeout -> "Timeout"
+  }
+}
+
+fn connect_error_to_string(error: httpc.ConnectError) -> String {
+  case error {
+    httpc.Posix(code:) -> code
+    httpc.TlsAlert(code:, detail:) ->
+      "TLS Error: " <> detail <> " (" <> int.to_string(code) <> ")"
+  }
 }
