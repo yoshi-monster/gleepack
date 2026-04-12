@@ -123,27 +123,6 @@ static posix_errno_t internal_read_link(HANDLE link_handle, efile_path_t *result
 
 /* --- gleepack helpers ---------------------------------------------------- */
 
-/* Return 1 if the wide-char path starts with /__gleepack__/. */
-static int is_gleepack_path(const efile_path_t *path) {
-    int length = (int)(path->size / sizeof(WCHAR)) - 1;
-    return length >= GLEEPACK_WPREFIX_LEN &&
-           !wcsncmp((const WCHAR*)path->data, GLEEPACK_WPREFIX, GLEEPACK_WPREFIX_LEN);
-}
-
-/* Extract the VFS-relative narrow path from a wide-char gleepack path.
- * VFS filenames are ASCII, so a simple narrowing suffices.
- * Returns 0 on success, EINVAL if any character is outside ASCII range. */
-static int gleepack_extract_vfs_path(const efile_path_t *path,
-                                     char *buf, size_t bufsize) {
-    const WCHAR *wpath = (const WCHAR *)path->data + GLEEPACK_WPREFIX_LEN;
-    size_t i;
-    for (i = 0; wpath[i] != L'\0' && i < bufsize - 1; i++) {
-        if (wpath[i] > 127) return EINVAL;
-        buf[i] = (char)wpath[i];
-    }
-    buf[i] = '\0';
-    return 0;
-}
 
 /* MSVC lacks strndup; provide a minimal replacement using malloc. */
 static char *gleepack_strndup(const char *s, size_t n) {
@@ -1465,9 +1444,9 @@ posix_errno_t efile_read_link(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_
 }
 
 posix_errno_t efile_list_dir(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_TERM *result) {
-    if (is_gleepack_path(path)) {
-        char vfs_path[GLEEPACK_MAX_VFS_PATH];
-        if (gleepack_extract_vfs_path(path, vfs_path, sizeof(vfs_path)) != 0) {
+    if (wcsncmp(path->data, GLEEPACK_WPREFIX, GLEEPACK_WPREFIX_LEN) == 0) {
+        static char vfs_path[GLEEPACK_MAX_VFS_PATH] = {};
+        if (!WideCharToMultiByte(CP_UTF8, 0, path->data + GLEEPACK_WPREFIX_LEN, &vfs_path, sizeof(vfs_path), 0, 0)) {
             *result = enif_make_list(env, 0);
             return EINVAL;
         }
@@ -1487,26 +1466,23 @@ posix_errno_t efile_list_dir(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_T
         /* Sort and deduplicate */
         qsort(ctx.names, ctx.count, sizeof(char*), cmp_str);
         ERL_NIF_TERM list_head = enif_make_list(env, 0);
-        size_t i;
-        for (i = ctx.count; i-- > 0; ) {
-            if (i + 1 < ctx.count && strcmp(ctx.names[i], ctx.names[i+1]) == 0) {
-                free(ctx.names[i]);
+
+        for (size_t i = ctx.count - 1; i < ctx.count; --i) {
+            const char *name = ctx.names[i];
+            if (i + 1 < ctx.count && strcmp(name, ctx.names[i+1]) == 0) {
                 continue;
             }
             /* Convert narrow name to WCHAR for Windows Erlang encoding */
-            size_t len = strlen(ctx.names[i]);
-            size_t wsize = len * sizeof(WCHAR);
-            unsigned char *buf;
             ERL_NIF_TERM term;
-            buf = enif_make_new_binary(env, wsize, &term);
-            {
-                WCHAR *wbuf = (WCHAR *)buf;
-                size_t j;
-                for (j = 0; j < len; j++) {
-                    wbuf[j] = (WCHAR)(unsigned char)ctx.names[i][j];
-                }
-            }
+
+            size_t len = MultiByteToWideChar(CP_UTF8, 0, name, -1, 0, 0);
+            WCHAR *buf = enif_make_new_binary(env, buf_len * sizeof(WCHAR), &term);
+            MultiByteToWideChar(CP_UTF8, 0, name, -1, &buf, len);
+
             list_head = enif_make_list_cell(env, term, list_head);
+        }
+
+        for (size_t i = 0; i < ctx.count; ++i) {
             free(ctx.names[i]);
         }
         free(ctx.names);
