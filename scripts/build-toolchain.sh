@@ -100,8 +100,8 @@ for app_dir in "$INSTALL_PREFIX/lib/erlang/lib/"*/; do
     cp -r "$app_dir" "$TOOLCHAIN_DIR/lib/$name"
 done
 
-# start.boot for booting without applications
-cp "$INSTALL_PREFIX/lib/erlang/bin/no_dot_erlang.boot" "$TOOLCHAIN_DIR/start.boot"
+# start.boot: use the build-tree copy which already has version-free paths.
+cp "$OTP_SRC/bin/no_dot_erlang.boot" "$TOOLCHAIN_DIR/start.boot"
 
 # rebar3 apps from its _build output
 for app_dir in "$REBAR3_SRC/_build/prod/lib/"*/; do
