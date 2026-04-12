@@ -34,27 +34,24 @@ cp otp/gleepack_vfs.h          "$OTP_SRC/erts/emulator/sys/unix/gleepack_vfs.h"
 cp otp/sys_drivers.c           "$OTP_SRC/erts/emulator/sys/unix/sys_drivers.c"
 cp otp/inet_gethost_native.erl "$OTP_SRC/lib/kernel/src/inet_gethost_native.erl"
 
-# Wrap STATIC_NIF_LIBS with --whole-archive so all object files in crypto.a
-# are included regardless of link order (ec_static.o is not directly referenced
-# but contains symbols needed by ecdh_static.o and pkey_static.o).
-# sed -i 's/\$(STATIC_NIF_LIBS)/-Wl,--whole-archive $(STATIC_NIF_LIBS) -Wl,--no-whole-archive/g' \
-    # "$OTP_SRC/erts/emulator/Makefile.in"
-
 # --- Configure ---
 # Static libcrypto, dead code elimination via --gc-sections.
 # Full static link: -static pulls in musl libc statically.
 cd "$OTP_SRC"
 ERL_TOP="$OTP_SRC" \
-CFLAGS="-Os -fdata-sections -ffunction-sections" \
-LDFLAGS="-static -static-libgcc -l/usr/lib/libcrypto.a" \
 ./configure \
     CC=clang \
+    CXX=clang \
+    LIBS="-lncursesw -lssl -lcrypto -ltinfo -lstdc++" \
+    CFLAGS="-Os" \
+    LDFLAGS="-static -static-libgcc -static-libstdc++" \
     --enable-jit \
     --with-termcap \
     --without-javac \
-    --with-ssl=/usr \
+    --with-ssl \
     --disable-dynamic-ssl-lib \
     --enable-static-nifs \
+    --enable-builtin-zlib \
     --enable-static-drivers \
     --without-wx \
     --without-debugger \
@@ -62,7 +59,8 @@ LDFLAGS="-static -static-libgcc -l/usr/lib/libcrypto.a" \
     --without-docs \
     --without-odbc \
     --without-et \
-    --disable-parallel-configure
+    --without-docs \
+    --disable-pie
 
 # Pass 1: build emulator so enif_* exports exist for crypto_callback build
 ERL_TOP="$OTP_SRC" make -j"$JOBS" -C "$OTP_SRC/erts/emulator" TYPE=opt

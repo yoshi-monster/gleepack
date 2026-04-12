@@ -1106,21 +1106,27 @@ posix_errno_t efile_list_dir(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_T
         /* Sort and deduplicate */
         qsort(ctx.names, ctx.count, sizeof(char*), cmp_str);
         ERL_NIF_TERM list_head = enif_make_list(env, 0);
-        for (size_t i = ctx.count; i-- > 0; ) {
-            if (i + 1 < ctx.count && strcmp(ctx.names[i], ctx.names[i+1]) == 0) {
+        unsigned char *entry_buf = NULL;
+        size_t entry_len = 0;
+
+        for (size_t i = ctx.count - 1; i < ctx.count; --i) {
+            // skip duplicates
+            if (entry_buf != NULL && strncmp(ctx.names[i], entry_buf, entry_len) == 0) {
                 free(ctx.names[i]);
                 continue;
             }
-            size_t len = strlen(ctx.names[i]);
-            unsigned char *buf;
+
             ERL_NIF_TERM term;
-            buf = enif_make_new_binary(env, len, &term);
-            sys_memcpy(buf, ctx.names[i], len);
+            entry_len = strlen(ctx.names[i]);
+            entry_buf = enif_make_new_binary(env, entry_len, &term);
+            sys_memcpy(entry_buf, ctx.names[i], entry_len);
+
             list_head = enif_make_list_cell(env, term, list_head);
+
             free(ctx.names[i]);
         }
-        free(ctx.names);
 
+        free(ctx.names);
         *result = list_head;
         return 0;
     }
