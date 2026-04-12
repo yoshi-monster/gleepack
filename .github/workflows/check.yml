@@ -1,8 +1,8 @@
 name: Check for new OTP releases
 
 on:
-  schedule:
-    - cron: "23 */12 * * *"
+  # schedule:
+  #   - cron: "23 */12 * * *"
   workflow_dispatch:
 
 jobs:
