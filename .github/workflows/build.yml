@@ -154,7 +154,7 @@ jobs:
   # ── gleepack runtime — Windows (WSL + MSVC via otp_build) ────────────────
   runtime-windows:
     needs: [version, create-release]
-    runs-on: windows-2025  # ARM64 target is cross-compiled via otp_build env_win32 arm64
+    runs-on: windows-2025 # ARM64 target is cross-compiled via otp_build env_win32 arm64
     defaults:
       run:
         shell: wsl-bash {0}
@@ -177,7 +177,7 @@ jobs:
           distribution: Ubuntu-24.04
 
       - name: Install WSL dependencies
-        run: sudo apt-get update && sudo apt-get install -y make autoconf curl zip
+        run: sudo apt-get update && sudo apt-get install -y make autoconf curl zip gh
 
       - name: Install LibreSSL (static)
         shell: cmd

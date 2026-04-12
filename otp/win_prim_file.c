@@ -102,6 +102,26 @@
 /* Maximum length of a VFS-relative path (narrow chars). */
 #define GLEEPACK_MAX_VFS_PATH 1024
 
+/* Returns 1 if path carries the gleepack VFS prefix, 0 otherwise. */
+static inline int is_gleepack_path(const efile_path_t *path) {
+    int len = (int)(path->size / sizeof(WCHAR)) - 1;
+    return len >= GLEEPACK_WPREFIX_LEN &&
+           wcsncmp((const WCHAR*)path->data, GLEEPACK_WPREFIX,
+                   GLEEPACK_WPREFIX_LEN) == 0;
+}
+
+/* Converts the wide VFS path to a narrow UTF-8 relative path (strips prefix).
+ * Returns 0 on success, -1 on failure (buf too small or conversion error). */
+static inline int gleepack_extract_vfs_path(const efile_path_t *path,
+                                             char *buf, size_t buf_size) {
+    const WCHAR *wrel = (const WCHAR*)path->data + GLEEPACK_WPREFIX_LEN;
+    if (!WideCharToMultiByte(CP_UTF8, 0, wrel, -1,
+                             buf, (int)buf_size, NULL, NULL)) {
+        return -1;
+    }
+    return 0;
+}
+
 typedef struct {
     efile_data_t common;
     HANDLE handle;
@@ -1446,7 +1466,7 @@ posix_errno_t efile_read_link(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_
 posix_errno_t efile_list_dir(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_TERM *result) {
     if (wcsncmp(path->data, GLEEPACK_WPREFIX, GLEEPACK_WPREFIX_LEN) == 0) {
         static char vfs_path[GLEEPACK_MAX_VFS_PATH] = {};
-        if (!WideCharToMultiByte(CP_UTF8, 0, path->data + GLEEPACK_WPREFIX_LEN, &vfs_path, sizeof(vfs_path), 0, 0)) {
+        if (!WideCharToMultiByte(CP_UTF8, 0, path->data + GLEEPACK_WPREFIX_LEN, -1, vfs_path, sizeof(vfs_path), NULL, NULL)) {
             *result = enif_make_list(env, 0);
             return EINVAL;
         }
@@ -1475,9 +1495,9 @@ posix_errno_t efile_list_dir(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_T
             /* Convert narrow name to WCHAR for Windows Erlang encoding */
             ERL_NIF_TERM term;
 
-            size_t len = MultiByteToWideChar(CP_UTF8, 0, name, -1, 0, 0);
-            WCHAR *buf = enif_make_new_binary(env, buf_len * sizeof(WCHAR), &term);
-            MultiByteToWideChar(CP_UTF8, 0, name, -1, &buf, len);
+            int len = MultiByteToWideChar(CP_UTF8, 0, name, -1, NULL, 0);
+            unsigned char *raw = enif_make_new_binary(env, (size_t)len * sizeof(WCHAR), &term);
+            MultiByteToWideChar(CP_UTF8, 0, name, -1, (LPWSTR)raw, len);
 
             list_head = enif_make_list_cell(env, term, list_head);
         }

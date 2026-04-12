@@ -31,24 +31,28 @@ mkdir -p "$OUT_DIR"
 # vcpkg LibreSSL may name them crypto.lib / ssl.lib, or put them in lib/manual-link/.
 # Find whichever exists and copy to the expected name.
 SSL_LIB_DIR="${SSL_PREFIX}/lib"
+STATIC_LIB_DIR="${SSL_LIB_DIR}/VC/$OTP_ARCH/MD"
+mkdir -p "${STATIC_LIB_DIR}"
 echo "=== vcpkg SSL lib dir ==="
 ls -la "${SSL_LIB_DIR}/" 2>&1 || true
 for name in crypto libcrypto; do
     src=$(find "${SSL_LIB_DIR}" -name "${name}.lib" -not -path "*/debug/*" 2>/dev/null | head -1)
     if [ -n "$src" ]; then
-        cp -f "$src" "${SSL_LIB_DIR}/libcrypto.lib"
-        echo "Copied $src -> ${SSL_LIB_DIR}/libcrypto.lib"
+        cp -f "$src" "${STATIC_LIB_DIR}/libcrypto_static.lib"
+        echo "Copied $src -> ${STATIC_LIB_DIR}/libcrypto_static.lib"
         break
     fi
 done
 for name in ssl libssl; do
     src=$(find "${SSL_LIB_DIR}" -name "${name}.lib" -not -path "*/debug/*" 2>/dev/null | head -1)
     if [ -n "$src" ]; then
-        cp -f "$src" "${SSL_LIB_DIR}/libssl.lib"
-        echo "Copied $src -> ${SSL_LIB_DIR}/libssl.lib"
+        cp -f "$src" "${STATIC_LIB_DIR}/libssl_static.lib"
+        echo "Copied $src -> ${STATIC_LIB_DIR}/libssl_static.lib"
         break
     fi
 done
+
+find "${SSL_PREFIX}"
 
 # --- OTP source ---
 curl -fSL -o /tmp/otp-src.tar.gz \
@@ -101,6 +105,48 @@ mk = mk.replace(old_rule, new_rule)
 
 p.write_text(mk)
 print("Makefile.in patched: beam DLL → static exe, MSVCRT → LIBCMT")
+
+# 4. Patch crypto_callback.c: when building a static NIF, __declspec(dllexport)
+#    on get_crypto_callbacks conflicts with the plain extern declaration in the
+#    header (no DLLEXPORT there under !HAVE_DYNAMIC_CRYPTO_LIB). MSVC raises
+#    C2375 "redefinition; different linkage". Strip the dllexport annotation
+#    when STATIC_ERLANG_NIF is defined.
+cb = pathlib.Path("lib/crypto/c_src/crypto_callback.c")
+src = cb.read_text()
+old_dllexport = "#ifdef __WIN32__\n#  define DLLEXPORT __declspec(dllexport)\n"
+new_dllexport = (
+    "#ifdef __WIN32__\n"
+    "#  ifdef STATIC_ERLANG_NIF\n"
+    "#    define DLLEXPORT\n"
+    "#  else\n"
+    "#    define DLLEXPORT __declspec(dllexport)\n"
+    "#  endif\n"
+)
+assert old_dllexport in src, "DLLEXPORT block not found in crypto_callback.c — check OTP version"
+cb.write_text(src.replace(old_dllexport, new_dllexport))
+print("crypto_callback.c patched: DLLEXPORT → empty for STATIC_ERLANG_NIF builds")
+
+# 5. Patch public_key/c_src/Makefile to add a static_lib target.
+#    On Windows, public_key.dll depends on OpenSSL DLLs which don't exist in
+#    our fully-static build.  Statically linking it into the emulator avoids
+#    the runtime DLL load failure.  Linux/macOS .so files are self-contained so
+#    they don't have this problem.  The Makefile.in ifeq(yes) block only covers
+#    asn1+crypto, so we must add public_key explicitly.
+pk = pathlib.Path("lib/public_key/c_src/Makefile")
+pk_mk = pk.read_text()
+static_lib_rule = """
+static_lib: $(LIBDIR)/pubkey_os_cacerts.a
+
+$(OBJDIR)/%_static.o: %.c
+\t$(V_CC) -c $(DED_STATIC_CFLAGS) -o $@ $<
+
+$(LIBDIR)/pubkey_os_cacerts.a: $(OBJDIR)/public_key_static.o
+\t$(V_AR) $(AR_OUT)$@ $^
+\t$(V_RANLIB) $@
+"""
+assert "static_lib" not in pk_mk, "public_key Makefile already has static_lib target"
+pk.write_text(pk_mk + static_lib_rule)
+print("public_key/c_src/Makefile patched: added static_lib target")
 PYEOF
 
 # --- Set up MSVC environment and configure ---
@@ -110,6 +156,13 @@ export ERLC_USE_SERVER=true
 export ERTS_SKIP_DEPEND=true
 
 eval "$(./otp_build env_win32 "$OTP_ARCH")"
+
+# lib/* static-NIF Makefiles check USING_VC (not MIXED_VC from otp.mk) to
+# decide whether AR_FLAGS should be empty (VC) or "rc" (GNU ar). The emulator
+# Makefile sets USING_VC=@MIXED_VC@ in its own scope but does not export it
+# to sub-makes. Without it, ar.sh passes "rc" as an input file to link.exe
+# /lib, causing LNK1181.
+export USING_VC=yes
 
 # otp_build env_win32 sets INCLUDE/LIB for the target arch but may not add
 # the MSVC cross-compiler binary directory to PATH. Find it via vswhere and
@@ -125,32 +178,62 @@ if [ "$OTP_ARCH" = "arm64" ]; then
     fi
 fi
 
-# LibreSSL static lib requires these Windows system libs for its internal calls.
-# LIBS is picked up by autoconf's compile+link test inside crypto/configure.
-export LIBS="bcrypt.lib crypt32.lib ws2_32.lib"
+# LIBS flows through configure into @LIBS@ in every generated Makefile, so
+# everything here ends up on the emulator link line.
+#
+# - bcrypt.lib crypt32.lib ws2_32.lib: required by LibreSSL static libs
+# - libcrypto_static.lib libssl_static.lib: OpenSSL symbols needed by crypto.a
+# - ole32.lib: CoTaskMemFree / SHGetKnownFolderPath used by gleepack_entry.c
+export LIBS="${STATIC_LIB_DIR}/libcrypto_static.lib ${STATIC_LIB_DIR}/libssl_static.lib bcrypt.lib crypt32.lib ws2_32.lib ole32.lib"
+ 
 
+# Use --enable-static-nifs=yes so the emulator Makefile auto-discovers all NIFs
+# (asn1, crypto, public_key, etc.) the same way as Linux/macOS builds.
+# The only Windows-specific issue was asn1rt_nif.lib vs .a: the .a copy we
+# create above (after `make static_lib`) makes the ifeq(yes) .a path work.
 ./otp_build configure \
+    --enable-jit \
     --with-ssl="$SSL_PREFIX" \
     --disable-dynamic-ssl-lib \
-    --enable-static-nifs \
+    --enable-static-nifs="${OTP_SRC}/lib/asn1/priv/lib/win32/asn1rt_nif.a,${OTP_SRC}/lib/crypto/priv/lib/win32/crypto.a,${OTP_SRC}/lib/public_key/priv/lib/win32/pubkey_os_cacerts.a" \
     --enable-static-drivers \
+    --enable-builtin-zlib \
     --without-wx \
     --without-debugger \
     --without-observer \
     --without-docs \
     --without-odbc \
-    --without-et
+    --without-et \
+    --without-docs
 
 # --- Two-pass emulator build (same rationale as Linux/macOS) ---
 
-# Pass 1: build emulator so crypto NIF can link against enif_* exports
-make -j"$JOBS" -C erts/emulator opt
+# Pre-build static NIF libs before the emulator passes.
+# The emulator Makefile.in has a multi-target rule:
+#   $(STATIC_NIF_LIBS) $(STATIC_DRIVER_LIBS):
+#       (cd lib/ && make static_lib)
+# GNU Make runs that recipe once per target, so with -jN the two targets
+# (asn1rt_nif.lib and crypto.a) trigger concurrent make static_lib invocations
+# that race on the same .o files, causing LNK1104. Building first ensures the
+# files exist so make skips the rule during the emulator passes.
+make -j"$JOBS" -C lib BUILD_STATIC_LIBS=1 TYPE=opt static_lib
 
-# Build crypto NIF against the emulator
-make -j"$JOBS" -C lib/crypto/c_src opt
+# make_driver_tab strips the .a suffix and _nif suffix from the basename to
+# derive the symbol name, then appends _nif_init.  For asn1rt_nif.lib the
+# .lib branch strips _nif.* → "asn1rt" → expects "asn1rt_nif_init".
+# But ERL_NIF_INIT(asn1rt_nif,...) without STATIC_ERLANG_NIF_LIBNAME exports
+# "asn1rt_nif_nif_init".  The colon override syntax only works for .a files.
+# Fix: create a stub .a that just contains the .lib objects (link.exe /lib can
+# produce an archive), then name it asn1rt_nif.a so make_driver_tab sees
+# "asn1rt_nif" → generates "asn1rt_nif_nif_init" which matches the export.
+cp lib/asn1/priv/lib/win32/asn1rt_nif.lib lib/asn1/priv/lib/win32/asn1rt_nif.a
 
-# Pass 2: remove beam to force a relink that pulls in crypto + libcrypto
-find bin -name "beam*.exe" -o -name "beam*.dll" | xargs rm -f
+# Single-pass emulator build. On Windows, crypto.a is already built by the
+# pre-build step above and linked statically via STATIC_NIF_LIBS. The two-pass
+# Unix dance (build emulator → build crypto.so → relink) is not needed here:
+# the DLL build would fail anyway because libcrypto_static.lib pulls in
+# BCryptGenRandom which is only in bcrypt.lib — a dep we carry in the emulator
+# LIBS, not in the DLL link command.
 make -j"$JOBS" -C erts/emulator opt
 
 # --- Copy result ---
