@@ -1,2 +1,0 @@
--module(gleepack_app_file_ffi).
--export([]).
