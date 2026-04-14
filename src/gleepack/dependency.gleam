@@ -18,7 +18,7 @@ pub fn production(
     project.dependencies
     |> gleam_last(manifest)
     |> list.map(Visit)
-    |> dependencies_loop(set.new(), [], manifest),
+    |> dependencies_loop(set.new(), [], manifest, False),
   )
 
   Ok(list.reverse([project, ..dependencies]))
@@ -26,16 +26,22 @@ pub fn production(
 
 // Like dependency.production but also includes dev_dependencies, tagging
 // packages only reachable via dev deps with is_dev: True.
-pub fn all(project: Project, manifest: Manifest) -> Result(List(Project), Snag) {
+// For local (path) dependencies, their dev_dependencies are also included
+// so they are available when the main package is compiled.
+pub fn all(
+  project: Project,
+  manifest: Manifest,
+) -> Result(List(Project), Snag) {
   // Compute prod-reachable names first.
   use prod_dependencies <- result.try(
     project.dependencies
     |> gleam_last(manifest)
     |> list.map(Visit)
-    |> dependencies_loop(set.new(), [], manifest),
+    |> dependencies_loop(set.new(), [], manifest, False),
   )
 
-  // Walk all deps including dev.
+  // Walk all deps including dev. For local deps, also traverse their
+  // dev_dependencies so they are compiled before the main package.
   let all_dependencies = case project {
     project.Gleam(dev_dependencies:, dependencies:, ..) ->
       list.append(dependencies, dev_dependencies)
@@ -46,7 +52,7 @@ pub fn all(project: Project, manifest: Manifest) -> Result(List(Project), Snag) 
     all_dependencies
     |> gleam_last(manifest)
     |> list.map(Visit)
-    |> dependencies_loop(set.new(), [], manifest),
+    |> dependencies_loop(set.new(), [], manifest, True),
   )
 
   // Tag packages not reachable from prod as dev-only.
@@ -70,24 +76,46 @@ fn dependencies_loop(
   visited: Set(String),
   sorted: List(Project),
   manifest: Manifest,
+  include_local_dev: Bool,
 ) -> Result(List(Project), Snag) {
   case stack {
     [] -> Ok(sorted)
 
     [Emit(dependency), ..stack] ->
-      dependencies_loop(stack, visited, [dependency, ..sorted], manifest)
+      dependencies_loop(
+        stack,
+        visited,
+        [dependency, ..sorted],
+        manifest,
+        include_local_dev,
+      )
 
     [Visit(name), ..stack] -> {
       case set.contains(visited, name) {
-        True -> dependencies_loop(stack, visited, sorted, manifest)
+        True ->
+          dependencies_loop(stack, visited, sorted, manifest, include_local_dev)
         False -> {
           use dependency <- result.try(
             dict.get(manifest, name)
             |> snag.replace_error("Dependency not found in manifest: " <> name),
           )
 
+          let deps = case include_local_dev {
+            True ->
+              case dependency {
+                project.Gleam(
+                  is_local: True,
+                  dev_dependencies:,
+                  dependencies:,
+                  ..,
+                ) -> list.append(dependencies, dev_dependencies)
+                _ -> dependency.dependencies
+              }
+            False -> dependency.dependencies
+          }
+
           let stack =
-            dependency.dependencies
+            deps
             |> gleam_last(manifest)
             |> list.fold([Emit(dependency), ..stack], fn(stack, name) {
               case set.contains(visited, name) {
@@ -96,7 +124,9 @@ fn dependencies_loop(
               }
             })
 
-          dependencies_loop(stack, set.insert(visited, name), sorted, manifest)
+          let visited = set.insert(visited, name)
+
+          dependencies_loop(stack, visited, sorted, manifest, include_local_dev)
         }
       }
     }

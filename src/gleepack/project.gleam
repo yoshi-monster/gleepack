@@ -26,6 +26,7 @@ pub type Project {
     is_dev: Bool,
     src: String,
     // gleam-specific options
+    is_local: Bool,
     dev_dependencies: List(String),
     target: Option(Target),
     extra_applications: List(String),
@@ -58,10 +59,17 @@ pub type Manifest =
   Dict(String, Project)
 
 pub fn read(from dir: String) -> Result(Project, Snag) {
+  read_internal(dir, True)
+}
+
+fn read_internal(
+  from dir: String,
+  local is_local: Bool,
+) -> Result(Project, Snag) {
   use file_contents <- result.try(
     simplifile.read(filepath.join(dir, "gleam.toml"))
     |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Could not read gleam.toml"),
+    |> snag.context("Could not read gleam.toml from " <> dir),
   )
 
   use project_file <- result.try(
@@ -70,14 +78,15 @@ pub fn read(from dir: String) -> Result(Project, Snag) {
     |> snag.context("Could not parse gleam.toml"),
   )
 
-  parse_project(project_file, dir)
+  parse_project(project_file, dir, is_local)
   |> snag.map_error(tom_get_error)
-  |> snag.context("Could not read gleam.toml")
+  |> snag.context("Could not parse gleam.toml")
 }
 
 fn parse_project(
   project_file: Dict(String, Toml),
   src: String,
+  is_local: Bool,
 ) -> Result(Project, tom.GetError) {
   use name <- result.try(tom.get_string(project_file, ["name"]))
   use version <- result.try(tom.get_string(project_file, ["version"]))
@@ -160,6 +169,7 @@ fn parse_project(
     dependencies:,
     is_dev: False,
     src:,
+    is_local:,
     dev_dependencies:,
     target:,
     extra_applications:,
@@ -203,11 +213,22 @@ fn read_manifest_package(package: Toml) -> Result(Project, Snag) {
     package |> tom.as_table |> snag.map_error(tom_get_error),
   )
 
+  use is_local <- result.try(
+    tom.get_string(pkg, ["source"])
+    |> result.map(fn(source) { source == "local" })
+    |> snag.map_error(tom_get_error),
+  )
+
   use name <- result.try(
     tom.get_string(pkg, ["name"]) |> snag.map_error(tom_get_error),
   )
   use version <- result.try(
     tom.get_string(pkg, ["version"]) |> snag.map_error(tom_get_error),
+  )
+  use src <- result.try(
+    tom.get_string(pkg, ["path"])
+    |> or(filepath.join("build/packages", name))
+    |> snag.map_error(tom_get_error),
   )
 
   use dependencies <- result.try(
@@ -218,15 +239,13 @@ fn read_manifest_package(package: Toml) -> Result(Project, Snag) {
 
   let otp_app = tom.get_string(pkg, ["otp_app"]) |> result.unwrap(name)
 
-  let src = filepath.join("build/packages", name)
-
   use build_tools_toml <- result.try(
     tom.get_array(pkg, ["build_tools"]) |> snag.map_error(tom_get_error),
   )
 
   case build_tools_toml {
     [] -> snag.error("build_tools should not be empty")
-    [tom.String("gleam"), ..] -> read(from: src)
+    [tom.String("gleam"), ..] -> read_internal(from: src, local: is_local)
     [tom.String("rebar3"), ..] | [tom.String("rebar"), ..] ->
       Ok(Rebar3(name:, version:, otp_app:, dependencies:, is_dev: False, src:))
 
@@ -245,7 +264,9 @@ fn read_manifest_package(package: Toml) -> Result(Project, Snag) {
 
 // -- HELPERS -----------------------------------------------------------------
 
-fn optional(result: Result(a, tom.GetError)) -> Result(Option(a), tom.GetError) {
+fn optional(
+  result: Result(a, tom.GetError),
+) -> Result(Option(a), tom.GetError) {
   case result {
     Ok(value) -> Ok(Some(value))
     Error(tom.NotFound(..)) -> Ok(None)

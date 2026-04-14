@@ -80,7 +80,7 @@ CONFIGURE_FLAGS = \
 all: cli
 
 cli:
-	cd cli && gleam build
+    gleam build
 
 # --- OTP ---
 

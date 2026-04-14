@@ -38,7 +38,7 @@ pub const targets = [
     runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-aarch64-linux-otp-28.4.2.zip",
     runtime_hash: "sha256:0f6e4d427d5e4ad246f6f9493ef05156d96e1d371eca8d5e6ea7a5a4929fbf65",
     otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
-    otp_hash: "sha256:acf46c70d474b21ef558158922530dd28dff25d4309ac9a78bb467922ec06ed6",
+    otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
   ),
   Target(
     arch: platform.X64,
@@ -48,7 +48,7 @@ pub const targets = [
     runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-amd64-linux-otp-28.4.2.zip",
     runtime_hash: "sha256:d8bcd9cb25557247c140ddf0bda5310740d98b7eba4fd65a793b23364a493625",
     otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
-    otp_hash: "sha256:acf46c70d474b21ef558158922530dd28dff25d4309ac9a78bb467922ec06ed6",
+    otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
   ),
   Target(
     arch: platform.Arm64,
@@ -58,7 +58,7 @@ pub const targets = [
     runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-aarch64-macos-otp-28.4.2.zip",
     runtime_hash: "sha256:8d39d5c853024b20dcd33ef34f1e12d0e2661374773785b6bcee1243c844ce11",
     otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
-    otp_hash: "sha256:acf46c70d474b21ef558158922530dd28dff25d4309ac9a78bb467922ec06ed6",
+    otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
   ),
   Target(
     arch: platform.X64,
@@ -68,7 +68,7 @@ pub const targets = [
     runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-amd64-windows-otp-28.4.2.zip",
     runtime_hash: "sha256:12a9f880becb5b843034e25397e1a33f3725a22534e1d73c37b02e7218cd783a",
     otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
-    otp_hash: "sha256:acf46c70d474b21ef558158922530dd28dff25d4309ac9a78bb467922ec06ed6",
+    otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
   ),
 ]
 
@@ -209,7 +209,7 @@ pub fn uninstall(target: Target) -> Result(Nil, Snag) {
 
 fn install_runtime(cache_dir: String, target: Target) -> Result(String, Snag) {
   let Target(runtime_link: link, runtime_hash: hash, ..) = target
-  let path = filepath.directory_name(runtime_binary_path(cache_dir, target))
+  let path = runtime_binary_path(cache_dir, target)
   let target_dir = filepath.directory_name(path)
 
   use Nil <- result.try({
@@ -229,11 +229,6 @@ fn install_otp(cache_dir: String, target: Target) -> Result(String, Snag) {
 }
 
 fn download(label, target_dir, link, hash) {
-  use Nil <- result.try(
-    simplifile.create_directory_all(target_dir)
-    |> snag.map_error(simplifile.describe_error),
-  )
-
   use <- bool.guard(
     when: simplifile.is_directory(target_dir) == Ok(True),
     return: Ok(Nil),
@@ -247,6 +242,7 @@ fn download(label, target_dir, link, hash) {
   use response <- result.try(
     httpc.configure()
     |> httpc.timeout(5 * 60 * 1000)
+    |> httpc.follow_redirects(True)
     |> httpc.dispatch_bits(request)
     |> snag.map_error(error_to_string)
     |> snag.context("Downloading " <> link),
@@ -255,6 +251,11 @@ fn download(label, target_dir, link, hash) {
   use Nil <- result.try(
     validate_hash(response.body, hash)
     |> snag.context("Verifying hash"),
+  )
+
+  use Nil <- result.try(
+    simplifile.create_directory_all(target_dir)
+    |> snag.map_error(simplifile.describe_error),
   )
 
   use _ <- result.try(
