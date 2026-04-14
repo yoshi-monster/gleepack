@@ -184,31 +184,57 @@ fn parse_project(
 // -- MANIFEST ----------------------------------------------------------------
 
 pub fn manifest() -> Result(Manifest, Snag) {
+  manifest_from(".")
+}
+
+/// Read a manifest.toml from the given directory.
+/// Also merges in manifests from any local (path) dependencies so that
+/// their dev-dependencies are visible during the full dependency walk.
+pub fn manifest_from(dir: String) -> Result(Manifest, Snag) {
+  use root <- result.try(read_manifest_packages(dir))
+
+  // For each local Gleam dep, read its own manifest.toml and add any
+  // entries that are not already present in the root manifest.
+  dict.values(root)
+  |> list.filter_map(fn(p) {
+    case p {
+      Gleam(is_local: True, src:, ..) -> Ok(src)
+      _ -> Error(Nil)
+    }
+  })
+  |> list.try_fold(root, fn(acc, src) {
+    read_manifest_packages(src)
+    |> result.map(dict.merge(_, acc))
+  })
+}
+
+fn read_manifest_packages(dir: String) -> Result(Manifest, Snag) {
+  let path = filepath.join(dir, "manifest.toml")
   use contents <- result.try(
-    simplifile.read("manifest.toml")
+    simplifile.read(path)
     |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Could not read manifest.toml"),
+    |> snag.context("Could not read " <> path),
   )
 
   use manifest <- result.try(
     tom.parse(contents)
     |> snag.map_error(tom_parse_error)
-    |> snag.context("Could not parse manifest.toml"),
+    |> snag.context("Could not parse " <> path),
   )
 
   use packages <- result.try(
     tom.get_array(manifest, ["packages"])
     |> snag.map_error(tom_get_error)
-    |> snag.context("Could not read packages from manifest.toml"),
+    |> snag.context("Could not read packages from " <> path),
   )
 
   list.try_fold(packages, dict.new(), fn(acc, package) {
-    use project <- result.try(read_manifest_package(package))
+    use project <- result.try(read_manifest_package(package, dir))
     Ok(dict.insert(acc, project.name, project))
   })
 }
 
-fn read_manifest_package(package: Toml) -> Result(Project, Snag) {
+fn read_manifest_package(package: Toml, dir: String) -> Result(Project, Snag) {
   use pkg <- result.try(
     package |> tom.as_table |> snag.map_error(tom_get_error),
   )
@@ -225,11 +251,12 @@ fn read_manifest_package(package: Toml) -> Result(Project, Snag) {
   use version <- result.try(
     tom.get_string(pkg, ["version"]) |> snag.map_error(tom_get_error),
   )
-  use src <- result.try(
+  use relative_src <- result.try(
     tom.get_string(pkg, ["path"])
     |> or(filepath.join("build/packages", name))
     |> snag.map_error(tom_get_error),
   )
+  let src = filepath.join(dir, relative_src)
 
   use dependencies <- result.try(
     tom.get_array(pkg, ["requirements"])

@@ -107,6 +107,24 @@ key `tools." <> config.app_name <> ".targets`.
 
       use _ <- result.try(run("gleam", in: ".", with: ["deps", "download"]))
 
+      // Download deps for local (path) dependencies so their manifest.toml
+      // files exist before we do the full manifest read.
+      use local_manifest <- result.try(
+        project.manifest() |> snag.context("Reading project manifest"),
+      )
+      use _ <- result.try(
+        dict.values(local_manifest)
+        |> list.filter_map(fn(p) {
+          case p {
+            project.Gleam(is_local: True, src:, ..) -> Ok(src)
+            _ -> Error(Nil)
+          }
+        })
+        |> list.try_map(fn(src) {
+          run("gleam", in: src, with: ["deps", "download"])
+        }),
+      )
+
       use manifest <- result.try(
         project.manifest() |> snag.context("Reading project manifest"),
       )
