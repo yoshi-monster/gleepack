@@ -33,8 +33,6 @@ mkdir -p "$OUT_DIR"
 SSL_LIB_DIR="${SSL_PREFIX}/lib"
 STATIC_LIB_DIR="${SSL_LIB_DIR}/VC/$OTP_ARCH/MD"
 mkdir -p "${STATIC_LIB_DIR}"
-echo "=== vcpkg SSL lib dir ==="
-ls -la "${SSL_LIB_DIR}/" 2>&1 || true
 for name in crypto libcrypto; do
     src=$(find "${SSL_LIB_DIR}" -name "${name}.lib" -not -path "*/debug/*" 2>/dev/null | head -1)
     if [ -n "$src" ]; then
@@ -52,8 +50,6 @@ for name in ssl libssl; do
     fi
 done
 
-find "${SSL_PREFIX}"
-
 # --- OTP source ---
 curl -fSL -o /tmp/otp-src.tar.gz \
     "https://github.com/erlang/otp/releases/download/OTP-${OTP_VERSION}/otp_src_${OTP_VERSION}.tar.gz"
@@ -67,6 +63,9 @@ cp "$REPO/otp/gleepack_vfs.h"          "$OTP_SRC/erts/emulator/nifs/win32/gleepa
 cp "$REPO/otp/gleepack_entry.c"        "$OTP_SRC/erts/emulator/sys/win32/erl_main.c"
 cp "$REPO/otp/gleepack_vfs.h"          "$OTP_SRC/erts/emulator/sys/win32/gleepack_vfs.h"
 cp "$REPO/otp/inet_gethost_native.erl" "$OTP_SRC/lib/kernel/src/inet_gethost_native.erl"
+# public_key.c: replace #ifdef WINVER with #ifdef _WIN32 and fix static linkage
+# (see otp/win_public_key.c for full rationale)
+cp "$REPO/otp/win_public_key.c"        "$OTP_SRC/lib/public_key/c_src/public_key.c"
 
 cd "$OTP_SRC"
 
@@ -78,7 +77,7 @@ cd "$OTP_SRC"
 #   2. Replace the DLL link rule (-dll -def: -implib:) with a plain exe link
 #   3. Use LIBCMT (static CRT) instead of MSVCRT (dynamic CRT)
 python3 - <<'PYEOF'
-import re, pathlib
+import pathlib
 
 p = pathlib.Path("erts/emulator/Makefile.in")
 mk = p.read_text()
@@ -106,7 +105,7 @@ mk = mk.replace(old_rule, new_rule)
 p.write_text(mk)
 print("Makefile.in patched: beam DLL → static exe, MSVCRT → LIBCMT")
 
-# 4. Patch crypto_callback.c: when building a static NIF, __declspec(dllexport)
+# 3. Patch crypto_callback.c: when building a static NIF, __declspec(dllexport)
 #    on get_crypto_callbacks conflicts with the plain extern declaration in the
 #    header (no DLLEXPORT there under !HAVE_DYNAMIC_CRYPTO_LIB). MSVC raises
 #    C2375 "redefinition; different linkage". Strip the dllexport annotation
@@ -126,7 +125,7 @@ assert old_dllexport in src, "DLLEXPORT block not found in crypto_callback.c —
 cb.write_text(src.replace(old_dllexport, new_dllexport))
 print("crypto_callback.c patched: DLLEXPORT → empty for STATIC_ERLANG_NIF builds")
 
-# 5. Patch public_key/c_src/Makefile to add a static_lib target.
+# 4. Patch public_key/c_src/Makefile to add a static_lib target.
 #    On Windows, public_key.dll depends on OpenSSL DLLs which don't exist in
 #    our fully-static build.  Statically linking it into the emulator avoids
 #    the runtime DLL load failure.  Linux/macOS .so files are self-contained so
@@ -135,13 +134,24 @@ print("crypto_callback.c patched: DLLEXPORT → empty for STATIC_ERLANG_NIF buil
 pk = pathlib.Path("lib/public_key/c_src/Makefile")
 pk_mk = pk.read_text()
 static_lib_rule = """
+# AR_OUT / AR_FLAGS: the static public_key/c_src/Makefile does not contain the
+# ifeq ($(USING_VC),yes) block that Makefile.in-generated files have, so AR_OUT
+# would be empty and ar.sh would treat the output path as an input file (LNK1181).
+ifeq ($(USING_VC),yes)
+AR_OUT=-out:
+AR_FLAGS=
+else
+AR_OUT=
+AR_FLAGS=rc
+endif
+
 static_lib: $(LIBDIR)/pubkey_os_cacerts.a
 
 $(OBJDIR)/%_static.o: %.c
-\t$(V_CC) -c $(DED_STATIC_CFLAGS) -o $@ $<
+\t$(V_CC) -c $(DED_STATIC_CFLAGS) $(PUBKEY_INCLUDES) -I$(OBJDIR) -o $@ $<
 
 $(LIBDIR)/pubkey_os_cacerts.a: $(OBJDIR)/public_key_static.o
-\t$(V_AR) $(AR_OUT)$@ $^
+\t$(V_AR) $(AR_FLAGS) $(AR_OUT)$@ $^
 \t$(V_RANLIB) $@
 """
 assert "static_lib" not in pk_mk, "public_key Makefile already has static_lib target"
@@ -185,12 +195,10 @@ fi
 # - libcrypto_static.lib libssl_static.lib: OpenSSL symbols needed by crypto.a
 # - ole32.lib: CoTaskMemFree / SHGetKnownFolderPath used by gleepack_entry.c
 export LIBS="${STATIC_LIB_DIR}/libcrypto_static.lib ${STATIC_LIB_DIR}/libssl_static.lib bcrypt.lib crypt32.lib ws2_32.lib ole32.lib"
- 
 
-# Use --enable-static-nifs=yes so the emulator Makefile auto-discovers all NIFs
-# (asn1, crypto, public_key, etc.) the same way as Linux/macOS builds.
-# The only Windows-specific issue was asn1rt_nif.lib vs .a: the .a copy we
-# create above (after `make static_lib`) makes the ifeq(yes) .a path work.
+# Explicit NIF list: asn1rt_nif.a, crypto.a, pubkey_os_cacerts.a.
+# These are pre-built by the static_lib steps below before the emulator links.
+# asn1rt_nif.a is a copy of the .lib (see comment near that cp command).
 ./otp_build configure \
     --enable-jit \
     --with-ssl="$SSL_PREFIX" \
@@ -203,8 +211,7 @@ export LIBS="${STATIC_LIB_DIR}/libcrypto_static.lib ${STATIC_LIB_DIR}/libssl_sta
     --without-observer \
     --without-docs \
     --without-odbc \
-    --without-et \
-    --without-docs
+    --without-et
 
 # --- Two-pass emulator build (same rationale as Linux/macOS) ---
 
@@ -217,6 +224,11 @@ export LIBS="${STATIC_LIB_DIR}/libcrypto_static.lib ${STATIC_LIB_DIR}/libssl_sta
 # that race on the same .o files, causing LNK1104. Building first ensures the
 # files exist so make skips the rule during the emulator passes.
 make -j"$JOBS" -C lib BUILD_STATIC_LIBS=1 TYPE=opt static_lib
+
+# public_key/c_src is not reached by the top-level lib/ static_lib sweep because
+# public_key's Makefile does not forward the static_lib target to its c_src subdir.
+# Build it explicitly so pubkey_os_cacerts.a exists before the emulator links.
+make -C lib/public_key/c_src static_lib
 
 # make_driver_tab strips the .a suffix and _nif suffix from the basename to
 # derive the symbol name, then appends _nif_init.  For asn1rt_nif.lib the
