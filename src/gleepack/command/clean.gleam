@@ -9,8 +9,7 @@ pub fn command() -> Command(Result(Nil, Snag)) {
 Remove the gleepack build directory, discarding any previously compiled
 artefacts. This forces a full recompile on the next `gleepack build` run.
 
-This is usually not necessary — gleepack tracks changes and only recompiles
-what has changed.
+This is usually not necessary — gleepack always recompiles the entire project.
     ",
   )
   use _, _, _ <- glint.command
