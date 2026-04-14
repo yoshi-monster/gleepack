@@ -76,6 +76,7 @@ cd "$REBAR3_SRC"
 PATH="$INSTALL_PREFIX/bin:$PATH" \
 ERL_TOP="$OTP_SRC" \
 HOME="$PWD" \
+ERL_COMPILER_OPTIONS="[nowarn_deprecated_catch,nowarn_match_alias_pats]" \
 ./bootstrap
 
 # --- Elixir ---
