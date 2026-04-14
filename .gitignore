@@ -4,10 +4,8 @@ build
 _build
 erl_crash.dump
 /references
-/.planning
-/.claude
-CLAUDE.md
-AGENT.md
 *.crashdump
 /cli/gleepack
 /gleepack
+TODO.md
+/docs/
