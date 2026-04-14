@@ -16,8 +16,7 @@ version = "1.0.0"
 gleam_stdlib = ">= 0.70.0 and < 2.0.0"
 
 [dev_dependencies]
-# gleepack = { git = "git@github.com:yoshi-monster/gleepack.git", ref = "main" }
-gleepack = { path = "../.." }
+gleepack = { git = "git@github.com:yoshi-monster/gleepack.git", ref = "main" }
 
 [tools.gleepack]
 targets = ["aarch64-linux-otp-28.4.2", "aarch64-macos-otp-28.4.2", "amd64-linux-otp-28.4.2", "amd64-win32-otp-28.4.2"]
