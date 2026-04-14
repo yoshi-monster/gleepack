@@ -1,4 +1,3 @@
-/// A type-safe wrapper around Erlang's zip module.
 pub opaque type Builder {
   Builder(files: List(#(String, BitArray)), stored_extensions: List(String))
 }
@@ -52,7 +51,7 @@ pub fn add(
 
 /// Build the archive and return it as bytes in memory.
 @external(erlang, "gleepack_zip_ffi", "build_memory")
-pub fn build_memory(builder: Builder) -> BitArray
+pub fn to_bits(builder: Builder) -> BitArray
 
 /// Open a zip archive from bytes for reading.
 ///
@@ -77,7 +76,7 @@ pub fn get(handle: Handle, path: String) -> Result(BitArray, Error)
 ///
 /// Returns the list of extracted file paths on success.
 @external(erlang, "gleepack_zip_ffi", "extract_to_disk")
-pub fn extract_to_disk(
+pub fn extract(
   zip: BitArray,
   to directory: String,
 ) -> Result(List(String), Error)

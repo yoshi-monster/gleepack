@@ -5,7 +5,7 @@ import gleam/dict
 import gleam/int
 import gleam/io
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import gleam_community/ansi
@@ -72,108 +72,114 @@ key `tools." <> config.app_name <> ".targets`.
     |> snag.context("Reading project configuration"),
   )
 
-  use Nil <- result.try(case project {
-    project.Gleam(target: Some(project.Javascript), ..) ->
-      snag.error(config.app_name <> " does not support JavaScript target projects")
-    project.Gleam(..) -> Ok(Nil)
-    _ ->
-      snag.error(
-        "Expected a Gleam project but found a non-Gleam project at current directory",
+  case project {
+    project.Gleam(target: None, ..)
+    | project.Gleam(target: Some(project.Erlang), ..) -> {
+      let output =
+        output(flags)
+        |> result.unwrap(
+          project.output |> option.unwrap(filepath.join("build", project.name)),
+        )
+
+      let module =
+        module(flags)
+        |> result.unwrap(project.module |> option.unwrap(project.name))
+
+      use targets <- result.try(case targets(flags) {
+        Error(_) | Ok([]) ->
+          case project.targets {
+            [] ->
+              case target.default() {
+                Ok(t) -> Ok([t])
+                Error(Nil) ->
+                  snag.error(
+                    "Your platform is currently not supported. Please open an issue!",
+                  )
+              }
+            ts -> Ok(ts)
+          }
+        Ok(slugs) ->
+          list.try_map(slugs, fn(s) {
+            target.from_string(s)
+            |> snag.replace_error("Invalid target " <> string.inspect(s))
+          })
+      })
+
+      use _ <- result.try(run("gleam", in: ".", with: ["deps", "download"]))
+
+      use manifest <- result.try(
+        project.manifest() |> snag.context("Reading project manifest"),
       )
-  })
 
-  let assert project.Gleam(..) = project
+      use compile_dependencies <- result.try(
+        dependency.all(project, manifest)
+        |> snag.context("Resolving all dependencies"),
+      )
+      use dependencies <- result.try(
+        dependency.production(project, manifest)
+        |> snag.context("Resolving production dependencies"),
+      )
 
-  let out =
-    output(flags)
-    |> result.unwrap(
-      project.output |> option.unwrap(filepath.join("build", project.name)),
-    )
+      let multi_target = case targets {
+        [] | [_] -> False
+        _ -> True
+      }
 
-  let entry =
-    module(flags)
-    |> result.unwrap(project.module |> option.unwrap(project.name))
-
-  use requested_targets <- result.try(case targets(flags) {
-    Error(_) | Ok([]) ->
-      case project.targets {
-        [] ->
-          case target.default() {
-            Ok(t) -> Ok([t])
-            Error(Nil) ->
+      use grouped_targets <- result.try(
+        list.try_fold(targets, dict.new(), fn(groups, target) {
+          case target.matching_native(matching: target) {
+            Ok(compile_target) -> {
+              let groups =
+                dict.upsert(groups, compile_target, fn(targets) {
+                  [target, ..option.unwrap(targets, [])]
+                })
+              Ok(groups)
+            }
+            Error(_) ->
               snag.error(
-                "Your platform is currently not supported. Please open an issue!",
+                "No native toolchain available for " <> target.slug(target),
               )
           }
-        ts -> Ok(ts)
-      }
-    Ok(slugs) ->
-      list.try_map(slugs, fn(s) {
-        target.from_string(s)
-        |> snag.replace_error("Invalid target " <> string.inspect(s))
-      })
-  })
-
-  use _ <- result.try(run("gleam", in: ".", with: ["deps", "download"]))
-
-  use manifest <- result.try(
-    project.manifest() |> snag.context("Reading project manifest"),
-  )
-
-  use compile_deps <- result.try(
-    dependency.all(project, manifest)
-    |> snag.context("Resolving all dependencies"),
-  )
-  use dependencies <- result.try(
-    dependency.production(project, manifest)
-    |> snag.context("Resolving production dependencies"),
-  )
-
-  let multi_target = list.length(requested_targets) > 1
-
-  // Resolve the compile toolchain for each runtime target, then group so the
-  // release is built once per toolchain (BEAM bytecode is arch/OS agnostic).
-  use pairs <- result.try(
-    list.try_map(requested_targets, fn(runtime_target) {
-      target.matching_native(matching: runtime_target)
-      |> snag.replace_error(
-        "No native toolchain available for "
-        <> target.slug(runtime_target)
-        <> ". Cannot compile.",
+        }),
       )
-      |> result.map(fn(compile_target) { #(compile_target, runtime_target) })
-    }),
-  )
 
-  list.try_each(
-    dict.to_list(list.group(pairs, fn(pair) {
-      let #(compile_target, _) = pair
-      compile_target
-    })),
-    fn(group) {
-      let #(compile_target, runtime_pairs) = group
+      use #(compile_target, runtime_targets) <- list.try_each(dict.to_list(
+        grouped_targets,
+      ))
+
       use compile_installed <- result.try(
         target.install(compile_target)
         |> snag.context(
           "Installing compile toolchain " <> target.slug(compile_target),
         ),
       )
+
       use zip <- result.try(
         release_compiler.build(
           project:,
-          module: entry,
+          module:,
           dependencies:,
-          compile_dependencies: compile_deps,
+          compile_dependencies:,
           target: compile_installed,
         )
         |> snag.context("Building release for " <> target.slug(compile_target)),
       )
-      list.try_each(runtime_pairs, fn(pair) {
-        let #(_, runtime_target) = pair
-        stamp(zip, runtime_target, out, multi_target)
-      })
-    },
-  )
+
+      use runtime_target <- list.try_each(runtime_targets)
+
+      stamp(zip, runtime_target, output, multi_target)
+    }
+
+    project.Gleam(target: Some(project.Javascript), ..) ->
+      snag.error(
+        config.app_name <> " does not support JavaScript target projects",
+      )
+
+    _ ->
+      snag.error(
+        "Expected a Gleam project but found a non-Gleam project at current directory",
+      )
+  }
 }
 
 fn stamp(
@@ -223,6 +229,7 @@ fn stamp(
   )
 
   io.println(ansi.pink("      Built ") <> output_path)
+
   Ok(Nil)
 }
 

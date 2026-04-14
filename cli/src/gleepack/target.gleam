@@ -4,7 +4,6 @@ import gleam/bool
 import gleam/crypto
 import gleam/http/request
 import gleam/httpc
-import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -133,6 +132,10 @@ pub fn slug(target: Target) -> String {
   }
 }
 
+pub fn otp_version(target: Target) {
+  target.otp_version
+}
+
 pub type InstalledTarget {
   InstalledTarget(target: Target, runtime_binary: String, otp_directory: String)
 }
@@ -255,7 +258,7 @@ fn download(label, target_dir, link, hash) {
   )
 
   use _ <- result.try(
-    zip.extract_to_disk(response.body, target_dir)
+    zip.extract(response.body, target_dir)
     |> snag.map_error(zip.describe_error)
     |> snag.context("Extracting archive"),
   )
@@ -325,6 +328,6 @@ fn connect_error_to_string(error: httpc.ConnectError) -> String {
   case error {
     httpc.Posix(code:) -> code
     httpc.TlsAlert(code:, detail:) ->
-      "TLS Error: " <> detail <> " (" <> int.to_string(code) <> ")"
+      "TLS Error: " <> detail <> " (" <> code <> ")"
   }
 }

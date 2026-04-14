@@ -12,7 +12,7 @@ pub fn round_trip_get_test() {
   let bits =
     zip.new()
     |> zip.add(at: "a/hello.txt", containing: hello)
-    |> zip.build_memory()
+    |> zip.to_bits()
 
   let assert Ok(handle) = zip.open(bits)
   let assert Ok(data) = zip.get(handle, "a/hello.txt")
@@ -25,7 +25,7 @@ pub fn round_trip_multiple_files_test() {
     zip.new()
     |> zip.add(at: "hello.txt", containing: hello)
     |> zip.add(at: "goodbye.txt", containing: goodbye)
-    |> zip.build_memory()
+    |> zip.to_bits()
 
   let assert Ok(handle) = zip.open(bits)
   let assert Ok(a) = zip.get(handle, "hello.txt")
@@ -42,7 +42,7 @@ pub fn list_returns_entries_test() {
     zip.new()
     |> zip.add(at: "hello.txt", containing: hello)
     |> zip.add(at: "goodbye.txt", containing: goodbye)
-    |> zip.build_memory()
+    |> zip.to_bits()
 
   let assert Ok(handle) = zip.open(bits)
   let assert Ok(entries) = zip.list(handle)
@@ -57,7 +57,7 @@ pub fn list_entry_size_test() {
   let bits =
     zip.new()
     |> zip.add(at: "hello.txt", containing: hello)
-    |> zip.build_memory()
+    |> zip.to_bits()
 
   let assert Ok(handle) = zip.open(bits)
   let assert Ok(entries) = zip.list(handle)
@@ -78,7 +78,7 @@ pub fn get_missing_file_test() {
   let bits =
     zip.new()
     |> zip.add(at: "hello.txt", containing: hello)
-    |> zip.build_memory()
+    |> zip.to_bits()
 
   let assert Ok(handle) = zip.open(bits)
   let result = zip.get(handle, "does_not_exist.txt")
@@ -90,7 +90,7 @@ pub fn get_after_close_test() {
   let bits =
     zip.new()
     |> zip.add(at: "hello.txt", containing: hello)
-    |> zip.build_memory()
+    |> zip.to_bits()
 
   let assert Ok(handle) = zip.open(bits)
   zip.close(handle)
@@ -105,7 +105,7 @@ pub fn store_extensions_round_trip_test() {
     zip.new()
     |> zip.store_extensions([".beam"])
     |> zip.add(at: "mymodule.beam", containing: hello)
-    |> zip.build_memory()
+    |> zip.to_bits()
 
   let assert Ok(handle) = zip.open(bits)
   let assert Ok(data) = zip.get(handle, "mymodule.beam")

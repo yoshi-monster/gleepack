@@ -240,7 +240,7 @@ pub fn assemble(
 
   let builder = zip.add(builder, at: "start.boot", containing: boot_script)
 
-  Ok(zip.build_memory(builder))
+  Ok(zip.to_bits(builder))
 }
 
 // -- Full build pipeline -----------------------------------------------------
