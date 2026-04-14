@@ -69,95 +69,9 @@ cp "$REPO/otp/win_public_key.c"        "$OTP_SRC/lib/public_key/c_src/public_key
 
 cd "$OTP_SRC"
 
-# --- Patch Makefile.in to produce a static exe instead of a DLL ---
-#
-# By default the Windows BEAM builds as beam.smp.dll (loaded dynamically by
-# erl.exe via erlexec.dll). We want a single self-contained exe instead:
-#   1. Change FLAVOR_EXECUTABLE / PRIMARY_EXECUTABLE targets from .dll → .exe
-#   2. Replace the DLL link rule (-dll -def: -implib:) with a plain exe link
-#   3. Use LIBCMT (static CRT) instead of MSVCRT (dynamic CRT)
-python3 - <<'PYEOF'
-import pathlib
-
-p = pathlib.Path("erts/emulator/Makefile.in")
-mk = p.read_text()
-
-# 1. Rename beam targets from .dll to .exe
-mk = mk.replace("beam$(TF_MARKER).dll",       "beam$(TF_MARKER).exe")
-mk = mk.replace("beam$(TYPEMARKER).smp.dll",   "beam$(TYPEMARKER).smp.exe")
-
-# 2. Replace the DLL link rule with a static exe link rule.
-#    The original four-line rule inside ifeq ($(TARGET), win32):
-old_rule = (
-    "$(ld_verbose) $(LD) -dll -def:sys/$(ERLANG_OSTYPE)/erl.def \\\n"
-    "\t-implib:$(BINDIR)/erl_dll.lib -o $@ \\\n"
-    "\t$(LDFLAGS) $(DEXPORT) $(INIT_OBJS) $(OBJS) $(STATIC_NIF_LIBS) \\\n"
-    "\t$(STATIC_DRIVER_LIBS) $(LIBS)"
-)
-new_rule = (
-    "$(ld_verbose) $(LD) -lLIBCMT -o $@ \\\n"
-    "\t$(LDFLAGS) $(DEXPORT) $(INIT_OBJS) $(OBJS) $(STATIC_NIF_LIBS) \\\n"
-    "\t$(STATIC_DRIVER_LIBS) $(LIBS)"
-)
-assert old_rule in mk, "DLL link rule not found in Makefile.in — check OTP version"
-mk = mk.replace(old_rule, new_rule)
-
-p.write_text(mk)
-print("Makefile.in patched: beam DLL → static exe, MSVCRT → LIBCMT")
-
-# 3. Patch crypto_callback.c: when building a static NIF, __declspec(dllexport)
-#    on get_crypto_callbacks conflicts with the plain extern declaration in the
-#    header (no DLLEXPORT there under !HAVE_DYNAMIC_CRYPTO_LIB). MSVC raises
-#    C2375 "redefinition; different linkage". Strip the dllexport annotation
-#    when STATIC_ERLANG_NIF is defined.
-cb = pathlib.Path("lib/crypto/c_src/crypto_callback.c")
-src = cb.read_text()
-old_dllexport = "#ifdef __WIN32__\n#  define DLLEXPORT __declspec(dllexport)\n"
-new_dllexport = (
-    "#ifdef __WIN32__\n"
-    "#  ifdef STATIC_ERLANG_NIF\n"
-    "#    define DLLEXPORT\n"
-    "#  else\n"
-    "#    define DLLEXPORT __declspec(dllexport)\n"
-    "#  endif\n"
-)
-assert old_dllexport in src, "DLLEXPORT block not found in crypto_callback.c — check OTP version"
-cb.write_text(src.replace(old_dllexport, new_dllexport))
-print("crypto_callback.c patched: DLLEXPORT → empty for STATIC_ERLANG_NIF builds")
-
-# 4. Patch public_key/c_src/Makefile to add a static_lib target.
-#    On Windows, public_key.dll depends on OpenSSL DLLs which don't exist in
-#    our fully-static build.  Statically linking it into the emulator avoids
-#    the runtime DLL load failure.  Linux/macOS .so files are self-contained so
-#    they don't have this problem.  The Makefile.in ifeq(yes) block only covers
-#    asn1+crypto, so we must add public_key explicitly.
-pk = pathlib.Path("lib/public_key/c_src/Makefile")
-pk_mk = pk.read_text()
-static_lib_rule = """
-# AR_OUT / AR_FLAGS: the static public_key/c_src/Makefile does not contain the
-# ifeq ($(USING_VC),yes) block that Makefile.in-generated files have, so AR_OUT
-# would be empty and ar.sh would treat the output path as an input file (LNK1181).
-ifeq ($(USING_VC),yes)
-AR_OUT=-out:
-AR_FLAGS=
-else
-AR_OUT=
-AR_FLAGS=rc
-endif
-
-static_lib: $(LIBDIR)/pubkey_os_cacerts.a
-
-$(OBJDIR)/%_static.o: %.c
-\t$(V_CC) -c $(DED_STATIC_CFLAGS) $(PUBKEY_INCLUDES) -I$(OBJDIR) -o $@ $<
-
-$(LIBDIR)/pubkey_os_cacerts.a: $(OBJDIR)/public_key_static.o
-\t$(V_AR) $(AR_FLAGS) $(AR_OUT)$@ $^
-\t$(V_RANLIB) $@
-"""
-assert "static_lib" not in pk_mk, "public_key Makefile already has static_lib target"
-pk.write_text(pk_mk + static_lib_rule)
-print("public_key/c_src/Makefile patched: added static_lib target")
-PYEOF
+# Apply build-system patches (DLL→EXE, static NIFs, public_key static_lib).
+# Must run from $OTP_SRC; see scripts/patch-otp-windows.py for full rationale.
+python3 "$REPO/scripts/patch-otp-windows.py"
 
 # --- Set up MSVC environment and configure ---
 export ERL_TOP="$(pwd)"
