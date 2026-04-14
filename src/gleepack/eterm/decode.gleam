@@ -1,11 +1,17 @@
 /// Decoders for Erlang terms, plus a parser for term source strings.
-import gleam/dynamic/decode.{type DecodeError, type Decoder, type Dynamic}
+import gleam/dynamic/decode.{type Dynamic}
 import gleam/erlang/atom
 import gleam/option.{type Option}
 import gleepack/eterm/encode
 
 pub type Term =
   encode.Term
+
+pub type DecodeError =
+  decode.DecodeError
+
+pub type Decoder(a) =
+  decode.Decoder(a)
 
 // -- Primitive decoders ------------------------------------------------------
 

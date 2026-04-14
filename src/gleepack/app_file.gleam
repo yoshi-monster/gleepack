@@ -1,8 +1,7 @@
-/// Reads and writes Erlang OTP application resource (.app) files.
-import gleam/dynamic/decode
+import gleam/dynamic/decode.{DecodeError} as _
 import gleam/option
 import gleam/result
-import gleepack/eterm/decode as d
+import gleepack/eterm/decode.{type DecodeError}
 import gleepack/eterm/encode
 import simplifile
 import snag.{type Snag}
@@ -19,7 +18,7 @@ pub type AppFile {
 }
 
 pub type Error {
-  ParseError(List(decode.DecodeError))
+  ParseError(List(DecodeError))
   ReadError(simplifile.FileError)
 }
 
@@ -27,9 +26,9 @@ pub type Error {
 pub fn describe_error(error: Error) -> String {
   case error {
     ParseError([]) -> "parse error: unknown"
-    ParseError([decode.DecodeError(expected:, found:, path: []), ..]) ->
+    ParseError([DecodeError(expected:, found:, path: []), ..]) ->
       "parse error: expected " <> expected <> ", found " <> found
-    ParseError([decode.DecodeError(expected:, found:, path: [p, ..]), ..]) ->
+    ParseError([DecodeError(expected:, found:, path: [p, ..]), ..]) ->
       "parse error: expected " <> expected <> ", found " <> found <> " at " <> p
     ReadError(e) -> simplifile.describe_error(e)
   }
@@ -38,25 +37,26 @@ pub fn describe_error(error: Error) -> String {
 /// Parse the content of a `.app` file.
 pub fn parse(content: String) -> Result(AppFile, Error) {
   let mod_value_decoder = {
-    use m <- d.element(0, d.atom())
+    use m <- decode.element(0, decode.atom())
     decode.success(m)
   }
+
   let decoder = {
-    use name <- d.element(1, d.atom())
-    use vsn <- d.element(2, d.proplist("vsn", d.string()))
-    use description <- d.element(
-      2,
-      d.optional_proplist("description", d.string()),
-    )
-    use modules <- d.element(2, d.proplist("modules", decode.list(d.atom())))
-    use applications <- d.element(
-      2,
-      d.proplist("applications", decode.list(d.atom())),
-    )
-    use start_module <- d.element(
-      2,
-      d.optional_proplist("mod", mod_value_decoder),
-    )
+    use name <- decode.element(1, decode.atom())
+    use vsn <- decode.element(2, decode.proplist("vsn", decode.string()))
+    use description <- decode.element(2, {
+      decode.optional_proplist("description", decode.string())
+    })
+    use modules <- decode.element(2, {
+      decode.proplist("modules", decode.list(decode.atom()))
+    })
+    use applications <- decode.element(2, {
+      decode.proplist("applications", decode.list(decode.atom()))
+    })
+    use start_module <- decode.element(2, {
+      decode.optional_proplist("mod", mod_value_decoder)
+    })
+
     decode.success(AppFile(
       name:,
       version: vsn,
@@ -66,7 +66,8 @@ pub fn parse(content: String) -> Result(AppFile, Error) {
       start_module:,
     ))
   }
-  d.parse(on: content, run: decoder)
+
+  decode.parse(on: content, run: decoder)
   |> result.map_error(ParseError)
 }
 
@@ -77,6 +78,7 @@ pub fn read(path: String) -> Result(AppFile, Snag) {
     |> snag.map_error(simplifile.describe_error)
     |> snag.context("Reading " <> path),
   )
+
   parse(content)
   |> snag.map_error(describe_error)
   |> snag.context("Parsing " <> path)
@@ -90,6 +92,7 @@ pub fn to_string(app: AppFile) -> String {
       #("mod", encode.tuple([encode.atom(m), encode.list([], encode.atom)])),
     ]
   }
+
   let props = [
     #("description", encode.string(app.description)),
     #("vsn", encode.string(app.version)),
@@ -98,6 +101,7 @@ pub fn to_string(app: AppFile) -> String {
     #("applications", encode.list(app.applications, encode.atom)),
     ..mod_entry
   ]
+
   encode.tuple([
     encode.atom("application"),
     encode.atom(app.name),
