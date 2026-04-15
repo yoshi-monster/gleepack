@@ -325,7 +325,6 @@ fn spawn_rebar3(
   |> child_process.env("REBAR_BARE_COMPILER_OUTPUT_DIR", out)
   |> child_process.env("REBAR_PROFILE", "prod")
   |> child_process.env("REBAR_SKIP_PROJECT_PLUGINS", "true")
-  |> echo
   |> child_process.spawn_raw(package_stdio(project))
   |> snag.map_error(child_process.describe_start_error)
   |> snag.context("Could not start compile for " <> project.name)
