@@ -7,7 +7,16 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <sys/types.h>
+
+/* Set to 1 when GLEEPACK_DEBUG is present in the environment.  Defined in
+ * gleepack_entry.c; declared here so unix_prim_file.c and win_prim_file.c
+ * can read it without a separate header. */
+extern int g_debug;
+
+#define GLEEPACK_LOG(fmt, ...) \
+    do { if (g_debug) fprintf(stderr, "[gleepack] " fmt "\n", ##__VA_ARGS__); } while (0)
 
 /* hash.h is available in nifs/{unix,win32} and sys/{unix,win32} build contexts. */
 #include "hash.h"

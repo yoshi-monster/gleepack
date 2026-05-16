@@ -29,6 +29,8 @@
 #include <string.h>
 #include <stdio.h>
 
+int g_debug = 0; /* read by unix_prim_file.c / win_prim_file.c via gleepack_vfs.h */
+
 #if defined(__WIN32__)
 #  include <windows.h>
 #  include <io.h>
@@ -495,6 +497,8 @@ main(int argc, char **argv)
     sys_init_signal_stack();
 #endif
 
+    g_debug = (getenv("GLEEPACK_DEBUG") != NULL);
+
     gleepack_vfs_init();
 
     /* No archive attached — behave as a normal BEAM binary, passing the
@@ -502,6 +506,18 @@ main(int argc, char **argv)
      * invoke the binary with standard flags (-root, -boot, -extra, etc.)
      * to run escripts or Erlang files without a bundled release. */
     if (g_vfs.zmap == NULL) {
+        GLEEPACK_LOG("no archive found, forwarding argv to erl_start");
+        erl_start(argc, argv);
+        return 0;
+    }
+
+    GLEEPACK_LOG("archive found at offset %ld", (long)g_vfs.archive_offset);
+
+    /* GLEEPACK_RAW_ARGS: skip erl_args parsing and forward the caller's argv
+     * straight to erl_start.  The VFS is still active so /__gleepack__/ paths
+     * are served, but the caller must supply all -root/-boot/etc. flags. */
+    if (getenv("GLEEPACK_RAW_ARGS")) {
+        GLEEPACK_LOG("GLEEPACK_RAW_ARGS set, forwarding argv to erl_start");
         erl_start(argc, argv);
         return 0;
     }
@@ -530,8 +546,10 @@ main(int argc, char **argv)
     if (args_entry && gleepack_vfs_get_data(args_entry)) {
         const uint8_t *data = gleepack_vfs_get_data(args_entry);
         erl_args = parse_erl_args(data, args_entry->uncomp_size, &erl_argc);
+        GLEEPACK_LOG("erl_args: loaded from VFS (%d tokens)", erl_argc);
     } else {
         erl_args = parse_erl_args((const uint8_t *)default_erl_args, sizeof(default_erl_args) - 1, &erl_argc);
+        GLEEPACK_LOG("erl_args: not in VFS, using built-in defaults (%d tokens)", erl_argc);
     }
     if (!erl_args) {
         fprintf(stderr, "gleepack: out of memory building argv\n");
@@ -561,6 +579,12 @@ main(int argc, char **argv)
     memcpy(new_argv + 1,  erl_args, erl_argc * sizeof(char *));
     memcpy(new_argv + 1 + erl_argc, structural, nstructural * sizeof(char *));
     memcpy(new_argv + 1 + erl_argc + nstructural, argv + 1, (argc - 1) * sizeof(char *));
+
+    if (g_debug) {
+        for (int i = 0; i < new_argc; i++) {
+            fprintf(stderr, "[gleepack] argv[%d]: %s\n", i, new_argv[i]);
+        }
+    }
 
     erl_start(new_argc, new_argv);
     return 0;

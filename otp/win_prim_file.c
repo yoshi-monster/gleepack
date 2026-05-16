@@ -583,16 +583,19 @@ posix_errno_t efile_open(const efile_path_t *path, enum efile_modes_t modes,
 
         entry = gleepack_vfs_lookup(vfs_path);
         if (entry == NULL) {
+            GLEEPACK_LOG("vfs open: %s (not found)", vfs_path);
             (*d) = NULL;
             return ENOENT;
         }
 
         data = gleepack_vfs_get_data(entry);
         if (data == NULL) {
+            GLEEPACK_LOG("vfs open: %s (decompression error)", vfs_path);
             (*d) = NULL;
             return EIO;
         }
 
+        GLEEPACK_LOG("vfs open: %s", vfs_path);
         g = (efile_gleepack_t *)enif_alloc_resource(nif_type,
                                                      sizeof(efile_gleepack_t));
         g->magic = GLEEPACK_MAGIC;
@@ -1160,7 +1163,7 @@ posix_errno_t efile_read_info(const efile_path_t *path, int follow_links, efile_
         /* Check if it's an exact file match */
         gleepack_index_entry_t *entry = gleepack_vfs_lookup(vfs_path);
         if (entry != NULL) {
-            /* File exists in archive */
+            GLEEPACK_LOG("vfs stat: %s (file, %u bytes)", vfs_path, entry->uncomp_size);
             memset(result, 0, sizeof(*result));
             result->type   = EFILE_FILETYPE_REGULAR;
             result->size   = entry->uncomp_size;
@@ -1181,6 +1184,7 @@ posix_errno_t efile_read_info(const efile_path_t *path, int follow_links, efile_
         gleepack_vfs_foreach(check_prefix, &ctx);
 
         if (ctx.found) {
+            GLEEPACK_LOG("vfs stat: %s (dir)", vfs_path);
             memset(result, 0, sizeof(*result));
             result->type   = EFILE_FILETYPE_DIRECTORY;
             result->access = EFILE_ACCESS_READ;
@@ -1192,6 +1196,7 @@ posix_errno_t efile_read_info(const efile_path_t *path, int follow_links, efile_
             return 0;
         }
 
+        GLEEPACK_LOG("vfs stat: %s (not found)", vfs_path);
         return ENOENT;
     }
 
@@ -1465,8 +1470,10 @@ posix_errno_t efile_read_link(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_
 
 posix_errno_t efile_list_dir(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_TERM *result) {
     if (wcsncmp(path->data, GLEEPACK_WPREFIX, GLEEPACK_WPREFIX_LEN) == 0) {
-        static char vfs_path[GLEEPACK_MAX_VFS_PATH] = {};
-        if (!WideCharToMultiByte(CP_UTF8, 0, path->data + GLEEPACK_WPREFIX_LEN, -1, vfs_path, sizeof(vfs_path), NULL, NULL)) {
+        char vfs_path[GLEEPACK_MAX_VFS_PATH];
+        /* path->data is unsigned char* (UTF-16LE bytes); cast to WCHAR* so that
+         * + GLEEPACK_WPREFIX_LEN advances by wchars, not bytes. */
+        if (!WideCharToMultiByte(CP_UTF8, 0, (WCHAR*)path->data + GLEEPACK_WPREFIX_LEN, -1, vfs_path, sizeof(vfs_path), NULL, NULL)) {
             *result = enif_make_list(env, 0);
             return EINVAL;
         }
@@ -1479,9 +1486,12 @@ posix_errno_t efile_list_dir(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_T
         gleepack_vfs_foreach(list_dir_collect, &ctx);
 
         if (ctx.count == 0) {
+            GLEEPACK_LOG("vfs list_dir: %s (not found)", vfs_path);
             *result = enif_make_list(env, 0);
             return ENOENT;
         }
+
+        GLEEPACK_LOG("vfs list_dir: %s (%zu entries)", vfs_path, ctx.count);
 
         /* Sort and deduplicate */
         qsort(ctx.names, ctx.count, sizeof(char*), cmp_str);
