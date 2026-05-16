@@ -43,6 +43,7 @@ jobs:
           gh release create "OTP-${{ needs.version.outputs.otp_version }}" \
             --title "OTP ${{ needs.version.outputs.otp_version }}" \
             --notes "gleepack binaries for Erlang/OTP ${{ needs.version.outputs.otp_version }}" \
+            --target ${{ github.sha }} \
             --repo ${{ github.repository }} || true
 
   # ── OTP toolchain (Alpine, platform-independent BEAM + rebar3 + Elixir) ───
@@ -215,10 +216,13 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Force-update tag to current commit
+      - name: Force-update tag and release to current commit
         run: |
           gh api \
             --method PATCH \
             "/repos/${{ github.repository }}/git/refs/tags/OTP-${{ needs.version.outputs.otp_version }}" \
             -f sha=${{ github.sha }} \
             -F force=true
+          gh release edit "OTP-${{ needs.version.outputs.otp_version }}" \
+            --target ${{ github.sha }} \
+            --repo ${{ github.repository }}

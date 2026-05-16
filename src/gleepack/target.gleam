@@ -9,19 +9,20 @@ import gleam/io
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/order
 import gleam/result
 import gleam/string
 import gleam_community/ansi
 import gleepack/config
 import gleepack/zip
-import platform
+import platform.{type Arch, type Os}
 import simplifile
 import snag.{type Snag}
 
 pub opaque type Target {
   Target(
-    arch: platform.Arch,
-    os: platform.Os,
+    arch: Arch,
+    os: Os,
     otp_version: String,
     extra: Option(String),
     runtime_link: String,
@@ -32,7 +33,7 @@ pub opaque type Target {
   )
 }
 
-fn arch_to_string(arch: platform.Arch) -> String {
+fn arch_to_string(arch: Arch) -> String {
   case arch {
     platform.Arm64 -> "aarch64"
     platform.X64 -> "amd64"
@@ -45,7 +46,7 @@ fn arch_to_string(arch: platform.Arch) -> String {
   }
 }
 
-fn os_to_string(os: platform.Os) -> String {
+fn os_to_string(os: Os) -> String {
   case os {
     platform.Darwin -> "macos"
     platform.Linux -> "linux"
@@ -59,22 +60,36 @@ fn os_to_string(os: platform.Os) -> String {
   }
 }
 
-fn arch_decoder() -> decode.Decoder(platform.Arch) {
-  use s <- decode.then(decode.string)
+fn arch_from_string(s: String) -> Result(Arch, Nil) {
   case s {
-    "aarch64" -> decode.success(platform.Arm64)
-    "amd64" -> decode.success(platform.X64)
-    _ -> decode.failure(platform.Arm64, "Arch")
+    "aarch64" -> Ok(platform.Arm64)
+    "amd64" -> Ok(platform.X64)
+    _ -> Error(Nil)
   }
 }
 
-fn os_decoder() -> decode.Decoder(platform.Os) {
-  use s <- decode.then(decode.string)
+fn os_from_string(s: String) -> Result(Os, Nil) {
   case s {
-    "macos" -> decode.success(platform.Darwin)
-    "linux" -> decode.success(platform.Linux)
-    "win32" -> decode.success(platform.Win32)
-    _ -> decode.failure(platform.Linux, "Os")
+    "linux" -> Ok(platform.Linux)
+    "macos" -> Ok(platform.Darwin)
+    "win32" | "windows" -> Ok(platform.Win32)
+    _ -> Error(Nil)
+  }
+}
+
+fn arch_decoder() -> decode.Decoder(Arch) {
+  use s <- decode.then(decode.string)
+  case arch_from_string(s) {
+    Ok(arch) -> decode.success(arch)
+    Error(_) -> decode.failure(platform.Arm64, "Arch")
+  }
+}
+
+fn os_decoder() -> decode.Decoder(Os) {
+  use s <- decode.then(decode.string)
+  case os_from_string(s) {
+    Ok(os) -> decode.success(os)
+    Error(_) -> decode.failure(platform.Linux, "Os")
   }
 }
 
@@ -130,99 +145,96 @@ fn target_decoder() -> decode.Decoder(Target) {
   ))
 }
 
+const api_base = "https://api.github.com/repos/yoshi-monster/gleepack"
+
+type GhAsset {
+  GhAsset(name: String, url: String, digest: String)
+}
+
+type GhRelease {
+  GhRelease(tag_name: String, target_commitish: String, assets: List(GhAsset))
+}
+
+fn gh_asset_decoder() -> decode.Decoder(GhAsset) {
+  use name <- decode.field("name", decode.string)
+  use url <- decode.field("browser_download_url", decode.string)
+  use digest <- decode.field("digest", decode.string)
+  decode.success(GhAsset(name:, url:, digest:))
+}
+
+fn gh_release_decoder() -> decode.Decoder(GhRelease) {
+  use tag_name <- decode.field("tag_name", decode.string)
+  use target_commitish <- decode.field("target_commitish", decode.string)
+  use assets <- decode.field("assets", decode.list(gh_asset_decoder()))
+  decode.success(GhRelease(tag_name:, target_commitish:, assets:))
+}
+
+fn gh_get(url: String) -> Result(String, Snag) {
+  let assert Ok(req) = request.to(url)
+  let req = request.set_header(req, "accept", "application/vnd.github+json")
+  use response <- result.try(
+    httpc.configure()
+    |> httpc.follow_redirects(True)
+    |> httpc.dispatch(req)
+    |> snag.map_error(error_to_string)
+    |> snag.context("GET " <> url),
+  )
+  Ok(response.body)
+}
+
+fn parse_asset_name(name: String) -> Result(#(Arch, Os, String), Nil) {
+  use #(left, version_zip) <- result.try(string.split_once(name, "-otp-"))
+  use arch_os <- result.try(case left {
+    "gleepack-" <> rest -> Ok(rest)
+    _ -> Error(Nil)
+  })
+  use #(arch_str, os_str) <- result.try(string.split_once(arch_os, "-"))
+  use #(otp_version, rest) <- result.try(string.split_once(version_zip, ".zip"))
+  use <- bool.guard(when: rest != "", return: Error(Nil))
+  use arch <- result.try(arch_from_string(arch_str))
+  use os <- result.try(os_from_string(os_str))
+  Ok(#(arch, os, otp_version))
+}
+
+fn targets_for_release(release: GhRelease) -> List(Target) {
+  let GhRelease(tag_name:, target_commitish: revision, assets:) = release
+  case tag_name {
+    "OTP-" <> release_otp_version -> {
+      let otp_zip = "otp-" <> release_otp_version <> ".zip"
+      case list.find(assets, fn(a) { a.name == otp_zip }) {
+        Error(Nil) -> []
+        Ok(otp_asset) ->
+          list.filter_map(assets, fn(asset) {
+            use #(arch, os, otp_version) <- result.try(parse_asset_name(
+              asset.name,
+            ))
+            Ok(Target(
+              arch:,
+              os:,
+              otp_version:,
+              extra: None,
+              runtime_link: asset.url,
+              runtime_hash: asset.digest,
+              otp_link: otp_asset.url,
+              otp_hash: otp_asset.digest,
+              revision:,
+            ))
+          })
+      }
+    }
+    _ -> []
+  }
+}
+
 pub fn available() -> Result(List(Target), Snag) {
   io.println(ansi.pink("  Resolving") <> " versions")
-  [
-    Target(
-      arch: platform.Arm64,
-      os: platform.Linux,
-      otp_version: "29.0",
-      extra: None,
-      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/gleepack-aarch64-linux-otp-29.0.zip",
-      runtime_hash: "sha256:d66be407064ae92d1a54bdb11eb3da22179167d5ff710926f13fd32c72c41416",
-      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/otp-29.0.zip",
-      otp_hash: "sha256:ed93a14274032b2521aaf63e117721fe2481f28a5080b6897dc34bc6f7de5a85",
-      revision: "25f11fddd2f87f6af5efb5b3f70f62a30548afd9",
-    ),
-    Target(
-      arch: platform.Arm64,
-      os: platform.Darwin,
-      otp_version: "29.0",
-      extra: None,
-      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/gleepack-aarch64-macos-otp-29.0.zip",
-      runtime_hash: "sha256:bed60d59722303cd779eacd5ce10434fa9fe89257426a366b4544af4167ff476",
-      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/otp-29.0.zip",
-      otp_hash: "sha256:ed93a14274032b2521aaf63e117721fe2481f28a5080b6897dc34bc6f7de5a85",
-      revision: "25f11fddd2f87f6af5efb5b3f70f62a30548afd9",
-    ),
-    Target(
-      arch: platform.X64,
-      os: platform.Linux,
-      otp_version: "29.0",
-      extra: None,
-      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/gleepack-amd64-linux-otp-29.0.zip",
-      runtime_hash: "sha256:c2ff6a49fe5de5e2cbe0fcd2f9097016280176a69eaf996290eb313935cb836a",
-      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/otp-29.0.zip",
-      otp_hash: "sha256:ed93a14274032b2521aaf63e117721fe2481f28a5080b6897dc34bc6f7de5a85",
-      revision: "25f11fddd2f87f6af5efb5b3f70f62a30548afd9",
-    ),
-    Target(
-      arch: platform.X64,
-      os: platform.Win32,
-      otp_version: "29.0",
-      extra: None,
-      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/gleepack-amd64-windows-otp-29.0.zip",
-      runtime_hash: "sha256:e072d62881b482da20819cebb55b83b96a552031a38f239e2a7f7b0a70cfcb9f",
-      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/otp-29.0.zip",
-      otp_hash: "sha256:ed93a14274032b2521aaf63e117721fe2481f28a5080b6897dc34bc6f7de5a85",
-      revision: "25f11fddd2f87f6af5efb5b3f70f62a30548afd9",
-    ),
-    Target(
-      arch: platform.Arm64,
-      os: platform.Linux,
-      otp_version: "28.4.2",
-      extra: None,
-      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-aarch64-linux-otp-28.4.2.zip",
-      runtime_hash: "sha256:0f6e4d427d5e4ad246f6f9493ef05156d96e1d371eca8d5e6ea7a5a4929fbf65",
-      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
-      otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
-      revision: "508e29db2c797111529e6191ecaa156219891b86",
-    ),
-    Target(
-      arch: platform.Arm64,
-      os: platform.Darwin,
-      otp_version: "28.4.2",
-      extra: None,
-      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-aarch64-macos-otp-28.4.2.zip",
-      runtime_hash: "sha256:8d39d5c853024b20dcd33ef34f1e12d0e2661374773785b6bcee1243c844ce11",
-      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
-      otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
-      revision: "508e29db2c797111529e6191ecaa156219891b86",
-    ),
-    Target(
-      arch: platform.X64,
-      os: platform.Linux,
-      otp_version: "28.4.2",
-      extra: None,
-      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-amd64-linux-otp-28.4.2.zip",
-      runtime_hash: "sha256:d8bcd9cb25557247c140ddf0bda5310740d98b7eba4fd65a793b23364a493625",
-      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
-      otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
-      revision: "508e29db2c797111529e6191ecaa156219891b86",
-    ),
-    Target(
-      arch: platform.X64,
-      os: platform.Win32,
-      otp_version: "28.4.2",
-      extra: None,
-      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-amd64-windows-otp-28.4.2.zip",
-      runtime_hash: "sha256:12a9f880becb5b843034e25397e1a33f3725a22534e1d73c37b02e7218cd783a",
-      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
-      otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
-      revision: "508e29db2c797111529e6191ecaa156219891b86",
-    ),
-  ]
-  |> Ok
+  let url = api_base <> "/releases"
+  use body <- result.try(gh_get(url))
+  use releases <- result.try(
+    json.parse(body, decode.list(gh_release_decoder()))
+    |> snag.replace_error("Failed to parse releases response"),
+  )
+  Ok(list.flat_map(releases, targets_for_release))
 }
 
 pub fn default(available: List(Target)) -> Result(Target, Nil) {
@@ -254,6 +266,19 @@ pub fn matching_native(
 
 pub fn supported(target: Target) -> Bool {
   target.arch == platform.arch() && target.os == platform.os()
+}
+
+pub fn compare(a: Target, b: Target) -> order.Order {
+  use <- order.lazy_break_tie(in: string.compare(b.otp_version, a.otp_version))
+  use <- order.lazy_break_tie(in: string.compare(
+    arch_to_string(a.arch),
+    arch_to_string(b.arch),
+  ))
+  use <- order.lazy_break_tie(in: string.compare(
+    os_to_string(a.os),
+    os_to_string(b.os),
+  ))
+  order.Eq
 }
 
 pub fn slug(target: Target) -> String {

@@ -34,8 +34,8 @@ Use `targets add <slug>` to download and install a target.
 
   use available <- result.try(target.available())
   available
+  |> list.sort(target.compare)
   |> list.map(target.slug)
-  |> list.sort(string.compare)
   |> list.each(io.println)
 
   Ok(Nil)
@@ -61,8 +61,8 @@ what targets are supported.
       ))
     _ -> {
       installed
+      |> list.sort(fn(a, b) { target.compare(a.target, b.target) })
       |> list.map(fn(t) { target.slug(t.target) })
-      |> list.sort(string.compare)
       |> list.each(io.println)
     }
   }
