@@ -125,13 +125,18 @@ jobs:
             --repo ${{ github.repository }} \
             --clobber
 
-  # ── gleepack runtime — macOS (Apple Silicon only) ─────────────────────────
+  # ── gleepack runtime — macOS ──────────────────────────────────────────────
   runtime-macos:
     needs: [version, create-release]
-    runs-on: macos-15
+    runs-on: ${{ matrix.arch == 'amd64' && 'macos-13' || 'macos-15' }}
     env:
       GH_TOKEN: ${{ github.token }}
       OTP_VERSION: ${{ needs.version.outputs.otp_version }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [aarch64]
 
     steps:
       - name: Checkout repository
@@ -145,9 +150,9 @@ jobs:
       - name: Package and upload
         run: |
           cd /tmp
-          zip "gleepack-aarch64-macos-otp-${OTP_VERSION}.zip" gleepack
+          zip "gleepack-${{ matrix.arch }}-macos-otp-${OTP_VERSION}.zip" gleepack
           gh release upload "OTP-${OTP_VERSION}" \
-            "/tmp/gleepack-aarch64-macos-otp-${OTP_VERSION}.zip" \
+            "/tmp/gleepack-${{ matrix.arch }}-macos-otp-${OTP_VERSION}.zip" \
             --repo ${{ github.repository }} \
             --clobber
 
@@ -202,3 +207,18 @@ jobs:
             "/mnt/c/gleepack/gleepack-${{ matrix.arch }}-windows-otp-${OTP_VERSION}.zip" \
             --repo ${{ github.repository }} \
             --clobber
+
+  # ── Move tag to the commit that actually built the release ────────────────
+  update-tag:
+    needs: [version, toolchain, runtime-linux, runtime-macos, runtime-windows]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Force-update tag to current commit
+        run: |
+          gh api \
+            --method PATCH \
+            "/repos/${{ github.repository }}/git/refs/tags/OTP-${{ needs.version.outputs.otp_version }}" \
+            -f sha=${{ github.sha }} \
+            -F force=true
