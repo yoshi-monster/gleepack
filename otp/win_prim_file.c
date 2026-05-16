@@ -92,12 +92,15 @@
         (ft).dwHighDateTime = ull.HighPart; \
     } while(0)
 
-/* Gleepack VFS wide-char prefix.  On Windows, Erlang passes paths as UTF-16LE.
- * The /__gleepack__/ prefix is intercepted in efile_marshal_path (before
- * GetFullPathNameW can mangle it) and preserved as-is for dispatch in
- * efile_open, efile_read_info, and efile_list_dir. */
-#define GLEEPACK_WPREFIX     L"/__gleepack__/"
-#define GLEEPACK_WPREFIX_LEN 14  /* WCHARs, excluding NUL */
+/* Gleepack VFS paths go through GetFullPathNameW like all other paths.
+ * /__gleepack__/ is volumerelative on Windows, so it resolves to the
+ * long-path form \\?\X:\__gleepack__\... (backslashes, drive letter).
+ * We detect and extract VFS paths from this canonical form. */
+#define GLEEPACK_NORM_HEAD      L"\\\\?\\"           /* \\?\  — 4 WCHARs */
+#define GLEEPACK_NORM_HEAD_LEN  4
+#define GLEEPACK_NORM_TAIL      L":\\__gleepack__\\" /* :\__gleepack__\  — 15 WCHARs */
+#define GLEEPACK_NORM_TAIL_LEN  15
+#define GLEEPACK_NORM_TOTAL     20                   /* total prefix WCHARs */
 
 /* Maximum length of a VFS-relative path (narrow chars). */
 #define GLEEPACK_MAX_VFS_PATH 1024
@@ -105,20 +108,26 @@
 /* Returns 1 if path carries the gleepack VFS prefix, 0 otherwise. */
 static inline int is_gleepack_path(const efile_path_t *path) {
     int len = (int)(path->size / sizeof(WCHAR)) - 1;
-    return len >= GLEEPACK_WPREFIX_LEN &&
-           wcsncmp((const WCHAR*)path->data, GLEEPACK_WPREFIX,
-                   GLEEPACK_WPREFIX_LEN) == 0;
+    const WCHAR *d = (const WCHAR*)path->data;
+    return len >= GLEEPACK_NORM_TOTAL &&
+           wcsncmp(d, GLEEPACK_NORM_HEAD, GLEEPACK_NORM_HEAD_LEN) == 0 &&
+           iswalpha(d[GLEEPACK_NORM_HEAD_LEN]) &&
+           wcsncmp(d + GLEEPACK_NORM_HEAD_LEN + 1, GLEEPACK_NORM_TAIL,
+                   GLEEPACK_NORM_TAIL_LEN) == 0;
 }
 
-/* Converts the wide VFS path to a narrow UTF-8 relative path (strips prefix).
+/* Converts the wide VFS path to a narrow UTF-8 relative path (strips prefix,
+ * converts backslashes to forward slashes).
  * Returns 0 on success, -1 on failure (buf too small or conversion error). */
 static inline int gleepack_extract_vfs_path(const efile_path_t *path,
                                              char *buf, size_t buf_size) {
-    const WCHAR *wrel = (const WCHAR*)path->data + GLEEPACK_WPREFIX_LEN;
+    const WCHAR *wrel = (const WCHAR*)path->data + GLEEPACK_NORM_TOTAL;
     if (!WideCharToMultiByte(CP_UTF8, 0, wrel, -1,
                              buf, (int)buf_size, NULL, NULL)) {
         return -1;
     }
+    for (char *p = buf; *p; p++)
+        if (*p == '\\') *p = '/';
     return 0;
 }
 
@@ -319,21 +328,6 @@ posix_errno_t efile_marshal_path(ErlNifEnv *env, ERL_NIF_TERM path, efile_path_t
 
     if(has_invalid_null_termination(&raw_path)) {
         return EINVAL;
-    }
-
-    /* Gleepack VFS paths bypass Windows long-path normalization.
-     * GetFullPathNameW would resolve /__gleepack__/ relative to the current
-     * drive (e.g. \\?\C:\__gleepack__\...), destroying the prefix that
-     * efile_open et al. use for VFS dispatch.  Pass the raw binary through
-     * unmodified instead. */
-    {
-        int raw_len = (int)(raw_path.size / sizeof(WCHAR)) - 1;
-        if (raw_len >= GLEEPACK_WPREFIX_LEN &&
-            !wcsncmp((const WCHAR*)raw_path.data,
-                     GLEEPACK_WPREFIX, GLEEPACK_WPREFIX_LEN)) {
-            *result = raw_path;
-            return 0;
-        }
     }
 
     return get_full_path(env, (WCHAR*)raw_path.data, result);
@@ -1469,11 +1463,9 @@ posix_errno_t efile_read_link(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_
 }
 
 posix_errno_t efile_list_dir(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_TERM *result) {
-    if (wcsncmp(path->data, GLEEPACK_WPREFIX, GLEEPACK_WPREFIX_LEN) == 0) {
+    if (is_gleepack_path(path)) {
         char vfs_path[GLEEPACK_MAX_VFS_PATH];
-        /* path->data is unsigned char* (UTF-16LE bytes); cast to WCHAR* so that
-         * + GLEEPACK_WPREFIX_LEN advances by wchars, not bytes. */
-        if (!WideCharToMultiByte(CP_UTF8, 0, (WCHAR*)path->data + GLEEPACK_WPREFIX_LEN, -1, vfs_path, sizeof(vfs_path), NULL, NULL)) {
+        if (gleepack_extract_vfs_path(path, vfs_path, sizeof(vfs_path)) != 0) {
             *result = enif_make_list(env, 0);
             return EINVAL;
         }
