@@ -11,6 +11,7 @@ Usage:
 import json
 import re
 import sys
+import urllib.parse
 import urllib.request
 from typing import Optional
 
@@ -31,6 +32,22 @@ OS_MAP = {
 ASSET_RE = re.compile(r"^gleepack-(\w+)-(linux|macos|windows)-otp-(.+)\.zip$")
 
 
+def fetch_tag_commit(tag_name: str) -> str:
+    """Return the commit SHA that tag_name resolves to, following annotated tags."""
+    url = f"{API_BASE}/repos/{REPO}/git/refs/tags/{urllib.parse.quote(tag_name, safe='')}"
+    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req) as r:
+        data = json.load(r)
+    obj = data["object"]
+    if obj["type"] == "commit":
+        return obj["sha"]
+    # Annotated tag — dereference the tag object to get the commit it points to.
+    req2 = urllib.request.Request(obj["url"], headers={"Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req2) as r:
+        tag_obj = json.load(r)
+    return tag_obj["object"]["sha"]
+
+
 def fetch_releases(tag: Optional[str]) -> list[dict]:
     if tag:
         url = f"{API_BASE}/repos/{REPO}/releases/tags/{tag}"
@@ -45,7 +62,8 @@ def fetch_releases(tag: Optional[str]) -> list[dict]:
 
 
 def targets_for_release(release: dict) -> list[tuple]:
-    otp_version = release["tag_name"].removeprefix("OTP-")
+    tag_name = release["tag_name"]
+    otp_version = tag_name.removeprefix("OTP-")
     assets = {a["name"]: a for a in release["assets"]}
 
     otp_zip = f"otp-{otp_version}.zip"
@@ -56,6 +74,7 @@ def targets_for_release(release: dict) -> list[tuple]:
     otp_asset = assets[otp_zip]
     otp_link = otp_asset["browser_download_url"]
     otp_hash = otp_asset["digest"]
+    revision = fetch_tag_commit(tag_name)
 
     targets = []
     for name in sorted(assets):
@@ -69,7 +88,7 @@ def targets_for_release(release: dict) -> list[tuple]:
             print(f"  skipping unknown arch/os in: {name}", file=sys.stderr)
             continue
         asset = assets[name]
-        targets.append((arch, os, version, asset["browser_download_url"], asset["digest"], otp_link, otp_hash))
+        targets.append((arch, os, version, asset["browser_download_url"], asset["digest"], otp_link, otp_hash, revision))
 
     return targets
 
@@ -86,7 +105,7 @@ def main() -> None:
         all_targets.extend(targets_for_release(release))
 
     print("pub const targets = [")
-    for arch, os, version, runtime_link, runtime_hash, otp_link, otp_hash in all_targets:
+    for arch, os, version, runtime_link, runtime_hash, otp_link, otp_hash, revision in all_targets:
         print(f"  Target(")
         print(f"    arch: {arch},")
         print(f"    os: {os},")
@@ -96,6 +115,7 @@ def main() -> None:
         print(f'    runtime_hash: "{runtime_hash}",')
         print(f'    otp_link: "{otp_link}",')
         print(f'    otp_hash: "{otp_hash}",')
+        print(f'    revision: "{revision}",')
         print(f"  ),")
     print("]")
 
