@@ -1502,12 +1502,14 @@ posix_errno_t efile_list_dir(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_T
             if (i + 1 < ctx.count && strcmp(name, ctx.names[i+1]) == 0) {
                 continue;
             }
-            /* Convert narrow name to WCHAR for Windows Erlang encoding */
+            /* Convert narrow name to WCHAR for Windows Erlang encoding.
+             * Use explicit length (not -1) so the NUL terminator is excluded
+             * from the binary — Erlang expects length-delimited binaries. */
             ERL_NIF_TERM term;
-
-            int len = MultiByteToWideChar(CP_UTF8, 0, name, -1, NULL, 0);
+            int name_len = (int)strlen(name);
+            int len = MultiByteToWideChar(CP_UTF8, 0, name, name_len, NULL, 0);
             unsigned char *raw = enif_make_new_binary(env, (size_t)len * sizeof(WCHAR), &term);
-            MultiByteToWideChar(CP_UTF8, 0, name, -1, (LPWSTR)raw, len);
+            MultiByteToWideChar(CP_UTF8, 0, name, name_len, (LPWSTR)raw, len);
 
             list_head = enif_make_list_cell(env, term, list_head);
         }
