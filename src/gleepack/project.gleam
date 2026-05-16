@@ -58,13 +58,17 @@ pub type Project {
 pub type Manifest =
   Dict(String, Project)
 
-pub fn read(from dir: String) -> Result(Project, Snag) {
-  read_internal(dir, True)
+pub fn read(
+  from dir: String,
+  available available: List(target.Target),
+) -> Result(Project, Snag) {
+  read_internal(dir, True, available)
 }
 
 fn read_internal(
   from dir: String,
   local is_local: Bool,
+  available available: List(target.Target),
 ) -> Result(Project, Snag) {
   use file_contents <- result.try(
     simplifile.read(filepath.join(dir, "gleam.toml"))
@@ -78,7 +82,7 @@ fn read_internal(
     |> snag.context("Could not parse gleam.toml"),
   )
 
-  parse_project(project_file, dir, is_local)
+  parse_project(project_file, dir, is_local, available)
   |> snag.map_error(tom_get_error)
   |> snag.context("Could not parse gleam.toml")
 }
@@ -87,6 +91,7 @@ fn parse_project(
   project_file: Dict(String, Toml),
   src: String,
   is_local: Bool,
+  available: List(target.Target),
 ) -> Result(Project, tom.GetError) {
   use name <- result.try(tom.get_string(project_file, ["name"]))
   use version <- result.try(tom.get_string(project_file, ["version"]))
@@ -143,7 +148,7 @@ fn parse_project(
     |> result.try(list.try_map(_, tom.as_string))
     |> result.try(
       list.try_map(_, fn(target) {
-        case target.from_string(target) {
+        case target.from_string(available, target) {
           Ok(target) -> Ok(target)
           Error(Nil) ->
             Error(tom.WrongType(
@@ -272,7 +277,7 @@ fn read_manifest_package(package: Toml, dir: String) -> Result(Project, Snag) {
 
   case build_tools_toml {
     [] -> snag.error("build_tools should not be empty")
-    [tom.String("gleam"), ..] -> read_internal(from: src, local: is_local)
+    [tom.String("gleam"), ..] -> read_internal(from: src, local: is_local, available: [])
     [tom.String("rebar3"), ..] | [tom.String("rebar"), ..] ->
       Ok(Rebar3(name:, version:, otp_app:, dependencies:, is_dev: False, src:))
 

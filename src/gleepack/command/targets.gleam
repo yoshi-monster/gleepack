@@ -32,7 +32,8 @@ Use `targets add <slug>` to download and install a target.
     ")
   use _, _, _ <- glint.command()
 
-  target.targets
+  use available <- result.try(target.available())
+  available
   |> list.map(target.slug)
   |> list.sort(string.compare)
   |> list.each(io.println)
@@ -52,21 +53,19 @@ what targets are supported.
   )
   use _, _, _ <- glint.command()
 
-  case target.installed() {
-    [] -> {
+  use installed <- result.try(target.installed())
+  case installed {
+    [] ->
       io.println(ansi.dim(
         "No targets installed. Run `targets add <slug>` to install one.",
       ))
-    }
-
-    installed -> {
+    _ -> {
       installed
       |> list.map(fn(t) { target.slug(t.target) })
       |> list.sort(string.compare)
       |> list.each(io.println)
     }
   }
-
   Ok(Nil)
 }
 
@@ -84,8 +83,9 @@ Run `targets available` to see all supported target slugs.
   use named, _, _ <- glint.command()
 
   let slug = slug(named)
+  use available <- result.try(target.available())
   use target <- result.try(
-    target.from_string(slug)
+    target.from_string(available, slug)
     |> snag.replace_error(
       "Unknown target "
       <> string.inspect(slug)
@@ -115,9 +115,10 @@ currently installed.
   )
   use _, _, _ <- glint.command()
 
-  case target.installed() {
+  use installed <- result.try(target.installed())
+  case installed {
     [] -> Ok(io.println(ansi.pink("      Clean") <> " No targets installed"))
-    installed -> {
+    _ -> {
       case input.input(prompt: "Remove all installed targets? [y|N] ") {
         Ok("y") | Ok("Y") ->
           list.try_each(installed, fn(t) { target.uninstall(t.target) })
@@ -139,8 +140,9 @@ Run `targets installed` to see what is currently installed.
   use named, _, _ <- glint.command()
 
   let slug = slug(named)
+  use available <- result.try(target.available())
   use target <- result.try(
-    target.from_string(slug)
+    target.from_string(available, slug)
     |> snag.replace_error(
       "Unknown target "
       <> string.inspect(slug)

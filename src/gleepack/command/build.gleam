@@ -67,8 +67,12 @@ key `tools." <> config.app_name <> ".targets`.
 
   use _, _entries, flags <- glint.command
 
+  use available <- result.try(
+    target.available() |> snag.context("Loading available targets"),
+  )
+
   use project <- result.try(
-    project.read(".")
+    project.read(".", available: available)
     |> snag.context("Reading project configuration"),
   )
 
@@ -89,7 +93,7 @@ key `tools." <> config.app_name <> ".targets`.
         Error(_) | Ok([]) ->
           case project.targets {
             [] ->
-              case target.default() {
+              case target.default(available) {
                 Ok(t) -> Ok([t])
                 Error(Nil) ->
                   snag.error(
@@ -100,7 +104,7 @@ key `tools." <> config.app_name <> ".targets`.
           }
         Ok(slugs) ->
           list.try_map(slugs, fn(s) {
-            target.from_string(s)
+            target.from_string(available, s)
             |> snag.replace_error("Invalid target " <> string.inspect(s))
           })
       })
@@ -145,7 +149,7 @@ key `tools." <> config.app_name <> ".targets`.
 
       use grouped_targets <- result.try(
         list.try_fold(targets, dict.new(), fn(groups, target) {
-          case target.matching_native(matching: target) {
+          case target.matching_native(available, matching: target) {
             Ok(compile_target) -> {
               let groups =
                 dict.upsert(groups, compile_target, fn(targets) {

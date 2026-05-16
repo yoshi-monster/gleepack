@@ -2,9 +2,11 @@ import filepath
 import gleam/bit_array
 import gleam/bool
 import gleam/crypto
+import gleam/dynamic/decode
 import gleam/http/request
 import gleam/httpc
 import gleam/io
+import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -30,117 +32,223 @@ pub opaque type Target {
   )
 }
 
-pub const targets = [
-  Target(
-    arch: platform.Arm64,
-    os: platform.Linux,
-    otp_version: "29.0",
-    extra: None,
-    runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/gleepack-aarch64-linux-otp-29.0.zip",
-    runtime_hash: "sha256:d5dcaef9afcef3e1ca1fd1aad8343abf9fad057b13d2032d7f6dee3a78df6712",
-    otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/otp-29.0.zip",
-    otp_hash: "sha256:3f1ecdd0724d50cfdfaad260f224167e9d2610a00c442c8bc585478b7e7c56c5",
-    revision: "25f11fddd2f87f6af5efb5b3f70f62a30548afd9",
-  ),
-  Target(
-    arch: platform.Arm64,
-    os: platform.Darwin,
-    otp_version: "29.0",
-    extra: None,
-    runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/gleepack-aarch64-macos-otp-29.0.zip",
-    runtime_hash: "sha256:8bc85ceb7e5807801e963d8e5c37cff454f9b0ee9a0e08659c68bfebf30c9d33",
-    otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/otp-29.0.zip",
-    otp_hash: "sha256:3f1ecdd0724d50cfdfaad260f224167e9d2610a00c442c8bc585478b7e7c56c5",
-    revision: "25f11fddd2f87f6af5efb5b3f70f62a30548afd9",
-  ),
-  Target(
-    arch: platform.X64,
-    os: platform.Linux,
-    otp_version: "29.0",
-    extra: None,
-    runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/gleepack-amd64-linux-otp-29.0.zip",
-    runtime_hash: "sha256:453c2338b461660e4a1f0862f6a1d875bd1dad199a01f9ab99283698ea0fed7b",
-    otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/otp-29.0.zip",
-    otp_hash: "sha256:3f1ecdd0724d50cfdfaad260f224167e9d2610a00c442c8bc585478b7e7c56c5",
-    revision: "25f11fddd2f87f6af5efb5b3f70f62a30548afd9",
-  ),
-  Target(
-    arch: platform.X64,
-    os: platform.Win32,
-    otp_version: "29.0",
-    extra: None,
-    runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/gleepack-amd64-windows-otp-29.0.zip",
-    runtime_hash: "sha256:d304b0a9a0aed0c9620f37059e9f0206ac6a8f2e323fab7bea46641a62bdcecf",
-    otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/otp-29.0.zip",
-    otp_hash: "sha256:3f1ecdd0724d50cfdfaad260f224167e9d2610a00c442c8bc585478b7e7c56c5",
-    revision: "25f11fddd2f87f6af5efb5b3f70f62a30548afd9",
-  ),
-  Target(
-    arch: platform.Arm64,
-    os: platform.Linux,
-    otp_version: "28.4.2",
-    extra: None,
-    runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-aarch64-linux-otp-28.4.2.zip",
-    runtime_hash: "sha256:0f6e4d427d5e4ad246f6f9493ef05156d96e1d371eca8d5e6ea7a5a4929fbf65",
-    otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
-    otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
-    revision: "508e29db2c797111529e6191ecaa156219891b86",
-  ),
-  Target(
-    arch: platform.Arm64,
-    os: platform.Darwin,
-    otp_version: "28.4.2",
-    extra: None,
-    runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-aarch64-macos-otp-28.4.2.zip",
-    runtime_hash: "sha256:8d39d5c853024b20dcd33ef34f1e12d0e2661374773785b6bcee1243c844ce11",
-    otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
-    otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
-    revision: "508e29db2c797111529e6191ecaa156219891b86",
-  ),
-  Target(
-    arch: platform.X64,
-    os: platform.Linux,
-    otp_version: "28.4.2",
-    extra: None,
-    runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-amd64-linux-otp-28.4.2.zip",
-    runtime_hash: "sha256:d8bcd9cb25557247c140ddf0bda5310740d98b7eba4fd65a793b23364a493625",
-    otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
-    otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
-    revision: "508e29db2c797111529e6191ecaa156219891b86",
-  ),
-  Target(
-    arch: platform.X64,
-    os: platform.Win32,
-    otp_version: "28.4.2",
-    extra: None,
-    runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-amd64-windows-otp-28.4.2.zip",
-    runtime_hash: "sha256:12a9f880becb5b843034e25397e1a33f3725a22534e1d73c37b02e7218cd783a",
-    otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
-    otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
-    revision: "508e29db2c797111529e6191ecaa156219891b86",
-  ),
-]
+fn arch_to_string(arch: platform.Arch) -> String {
+  case arch {
+    platform.Arm64 -> "aarch64"
+    platform.X64 -> "amd64"
+    unknown ->
+      panic as {
+        "Unknown arch "
+        <> string.inspect(unknown)
+        <> ". This is a bug in gleepack. Please open an issue!"
+      }
+  }
+}
 
-pub fn default() -> Result(Target, Nil) {
+fn os_to_string(os: platform.Os) -> String {
+  case os {
+    platform.Darwin -> "macos"
+    platform.Linux -> "linux"
+    platform.Win32 -> "win32"
+    unknown ->
+      panic as {
+        "Unknown os "
+        <> string.inspect(unknown)
+        <> ". This is a bug in gleepack. Please open an issue!"
+      }
+  }
+}
+
+fn arch_decoder() -> decode.Decoder(platform.Arch) {
+  use s <- decode.then(decode.string)
+  case s {
+    "aarch64" -> decode.success(platform.Arm64)
+    "amd64" -> decode.success(platform.X64)
+    _ -> decode.failure(platform.Arm64, "Arch")
+  }
+}
+
+fn os_decoder() -> decode.Decoder(platform.Os) {
+  use s <- decode.then(decode.string)
+  case s {
+    "macos" -> decode.success(platform.Darwin)
+    "linux" -> decode.success(platform.Linux)
+    "win32" -> decode.success(platform.Win32)
+    _ -> decode.failure(platform.Linux, "Os")
+  }
+}
+
+fn target_to_json(target: Target) -> json.Json {
+  let Target(
+    arch:,
+    os:,
+    otp_version:,
+    extra:,
+    runtime_link:,
+    runtime_hash:,
+    otp_link:,
+    otp_hash:,
+    revision:,
+  ) = target
+  json.object([
+    #("arch", json.string(arch_to_string(arch))),
+    #("os", json.string(os_to_string(os))),
+    #("otp_version", json.string(otp_version)),
+    #("extra", case extra {
+      None -> json.null()
+      Some(value) -> json.string(value)
+    }),
+    #("runtime_link", json.string(runtime_link)),
+    #("runtime_hash", json.string(runtime_hash)),
+    #("otp_link", json.string(otp_link)),
+    #("otp_hash", json.string(otp_hash)),
+    #("revision", json.string(revision)),
+  ])
+}
+
+fn target_decoder() -> decode.Decoder(Target) {
+  use arch <- decode.field("arch", arch_decoder())
+  use os <- decode.field("os", os_decoder())
+  use otp_version <- decode.field("otp_version", decode.string)
+  use extra <- decode.field("extra", decode.optional(decode.string))
+  use runtime_link <- decode.field("runtime_link", decode.string)
+  use runtime_hash <- decode.field("runtime_hash", decode.string)
+  use otp_link <- decode.field("otp_link", decode.string)
+  use otp_hash <- decode.field("otp_hash", decode.string)
+  use revision <- decode.field("revision", decode.string)
+
+  decode.success(Target(
+    arch:,
+    os:,
+    otp_version:,
+    extra:,
+    runtime_link:,
+    runtime_hash:,
+    otp_link:,
+    otp_hash:,
+    revision:,
+  ))
+}
+
+pub fn available() -> Result(List(Target), Snag) {
+  io.println(ansi.pink("  Resolving") <> " versions")
+  [
+    Target(
+      arch: platform.Arm64,
+      os: platform.Linux,
+      otp_version: "29.0",
+      extra: None,
+      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/gleepack-aarch64-linux-otp-29.0.zip",
+      runtime_hash: "sha256:d66be407064ae92d1a54bdb11eb3da22179167d5ff710926f13fd32c72c41416",
+      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/otp-29.0.zip",
+      otp_hash: "sha256:ed93a14274032b2521aaf63e117721fe2481f28a5080b6897dc34bc6f7de5a85",
+      revision: "25f11fddd2f87f6af5efb5b3f70f62a30548afd9",
+    ),
+    Target(
+      arch: platform.Arm64,
+      os: platform.Darwin,
+      otp_version: "29.0",
+      extra: None,
+      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/gleepack-aarch64-macos-otp-29.0.zip",
+      runtime_hash: "sha256:bed60d59722303cd779eacd5ce10434fa9fe89257426a366b4544af4167ff476",
+      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/otp-29.0.zip",
+      otp_hash: "sha256:ed93a14274032b2521aaf63e117721fe2481f28a5080b6897dc34bc6f7de5a85",
+      revision: "25f11fddd2f87f6af5efb5b3f70f62a30548afd9",
+    ),
+    Target(
+      arch: platform.X64,
+      os: platform.Linux,
+      otp_version: "29.0",
+      extra: None,
+      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/gleepack-amd64-linux-otp-29.0.zip",
+      runtime_hash: "sha256:c2ff6a49fe5de5e2cbe0fcd2f9097016280176a69eaf996290eb313935cb836a",
+      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/otp-29.0.zip",
+      otp_hash: "sha256:ed93a14274032b2521aaf63e117721fe2481f28a5080b6897dc34bc6f7de5a85",
+      revision: "25f11fddd2f87f6af5efb5b3f70f62a30548afd9",
+    ),
+    Target(
+      arch: platform.X64,
+      os: platform.Win32,
+      otp_version: "29.0",
+      extra: None,
+      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/gleepack-amd64-windows-otp-29.0.zip",
+      runtime_hash: "sha256:e072d62881b482da20819cebb55b83b96a552031a38f239e2a7f7b0a70cfcb9f",
+      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-29.0/otp-29.0.zip",
+      otp_hash: "sha256:ed93a14274032b2521aaf63e117721fe2481f28a5080b6897dc34bc6f7de5a85",
+      revision: "25f11fddd2f87f6af5efb5b3f70f62a30548afd9",
+    ),
+    Target(
+      arch: platform.Arm64,
+      os: platform.Linux,
+      otp_version: "28.4.2",
+      extra: None,
+      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-aarch64-linux-otp-28.4.2.zip",
+      runtime_hash: "sha256:0f6e4d427d5e4ad246f6f9493ef05156d96e1d371eca8d5e6ea7a5a4929fbf65",
+      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
+      otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
+      revision: "508e29db2c797111529e6191ecaa156219891b86",
+    ),
+    Target(
+      arch: platform.Arm64,
+      os: platform.Darwin,
+      otp_version: "28.4.2",
+      extra: None,
+      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-aarch64-macos-otp-28.4.2.zip",
+      runtime_hash: "sha256:8d39d5c853024b20dcd33ef34f1e12d0e2661374773785b6bcee1243c844ce11",
+      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
+      otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
+      revision: "508e29db2c797111529e6191ecaa156219891b86",
+    ),
+    Target(
+      arch: platform.X64,
+      os: platform.Linux,
+      otp_version: "28.4.2",
+      extra: None,
+      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-amd64-linux-otp-28.4.2.zip",
+      runtime_hash: "sha256:d8bcd9cb25557247c140ddf0bda5310740d98b7eba4fd65a793b23364a493625",
+      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
+      otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
+      revision: "508e29db2c797111529e6191ecaa156219891b86",
+    ),
+    Target(
+      arch: platform.X64,
+      os: platform.Win32,
+      otp_version: "28.4.2",
+      extra: None,
+      runtime_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/gleepack-amd64-windows-otp-28.4.2.zip",
+      runtime_hash: "sha256:12a9f880becb5b843034e25397e1a33f3725a22534e1d73c37b02e7218cd783a",
+      otp_link: "https://github.com/yoshi-monster/gleepack/releases/download/OTP-28.4.2/otp-28.4.2.zip",
+      otp_hash: "sha256:3ded1537c66b13f2e1387e8b494ec789b730d444c1b4ffe1a41207e914217b3b",
+      revision: "508e29db2c797111529e6191ecaa156219891b86",
+    ),
+  ]
+  |> Ok
+}
+
+pub fn default(available: List(Target)) -> Result(Target, Nil) {
   let arch = platform.arch()
   let os = platform.os()
 
-  list.filter(targets, fn(target) { target.os == os && target.arch == arch })
+  list.filter(available, fn(t) { t.os == os && t.arch == arch })
   |> list.max(fn(a, b) { string.compare(a.otp_version, b.otp_version) })
 }
 
-pub fn from_string(slug input: String) -> Result(Target, Nil) {
-  list.find(targets, fn(target) { slug(target) == input })
+pub fn from_string(
+  available: List(Target),
+  slug input: String,
+) -> Result(Target, Nil) {
+  list.find(available, fn(t) { slug(t) == input })
 }
 
-pub fn matching_native(matching other_target: Target) -> Result(Target, Nil) {
+pub fn matching_native(
+  available: List(Target),
+  matching other_target: Target,
+) -> Result(Target, Nil) {
   let arch = platform.arch()
   let os = platform.os()
 
-  list.find(targets, fn(target) {
-    target.os == os
-    && target.arch == arch
-    && target.otp_version == other_target.otp_version
+  list.find(available, fn(t) {
+    t.os == os && t.arch == arch && t.otp_version == other_target.otp_version
   })
 }
 
@@ -149,31 +257,8 @@ pub fn supported(target: Target) -> Bool {
 }
 
 pub fn slug(target: Target) -> String {
-  let arch = case target.arch {
-    platform.Arm64 -> "aarch64"
-    platform.X64 -> "amd64"
-
-    unknown ->
-      panic as {
-        "Unknown arch "
-        <> string.inspect(unknown)
-        <> ". This is a bug in gleepack. Please open an issue!"
-      }
-  }
-
-  let os = case target.os {
-    platform.Darwin -> "macos"
-    platform.Linux -> "linux"
-    platform.Win32 -> "win32"
-
-    unknown ->
-      panic as {
-        "Unknown arch "
-        <> string.inspect(unknown)
-        <> ". This is a bug in gleepack. Please open an issue!"
-      }
-  }
-
+  let arch = arch_to_string(target.arch)
+  let os = os_to_string(target.os)
   case target.extra {
     Some(extra) ->
       arch <> "-" <> os <> "-otp-" <> target.otp_version <> "-" <> extra
@@ -189,25 +274,44 @@ pub type InstalledTarget {
   InstalledTarget(target: Target, runtime_binary: String, otp_directory: String)
 }
 
-pub fn installed() -> List(InstalledTarget) {
+pub fn installed() -> Result(List(InstalledTarget), Snag) {
   let cache = config.cache_dir()
-  list.filter_map(targets, fn(target) {
-    let runtime_binary = runtime_binary_path(cache, target)
-    let otp_directory = otp_dir_path(cache, target)
-    let rev_path = revision_file_path(cache, target)
-    case
-      simplifile.is_file(runtime_binary),
-      simplifile.is_directory(otp_directory),
-      simplifile.read(rev_path)
-    {
-      Ok(True), Ok(True), Ok(rev) ->
-        case string.trim(rev) == target.revision {
-          True -> Ok(InstalledTarget(target:, runtime_binary:, otp_directory:))
-          False -> Error(Nil)
-        }
-      _, _, _ -> Error(Nil)
-    }
+  let runtime_base = filepath.join(cache, "runtime")
+
+  use dirs <- result.try(case simplifile.read_directory(runtime_base) {
+    Error(simplifile.Enoent) -> Ok([])
+    other -> other |> snag.map_error(simplifile.describe_error)
   })
+
+  use acc, dir_name <- list.try_fold(dirs, [])
+  let json_path =
+    filepath.join(runtime_base, dir_name) |> filepath.join("target.json")
+
+  case simplifile.read(json_path) {
+    Error(simplifile.Enoent) -> Ok(acc)
+    other -> {
+      use json_str <- result.try(
+        other |> snag.map_error(simplifile.describe_error),
+      )
+      use target <- result.try(
+        json.parse(json_str, target_decoder())
+        |> snag.replace_error("Invalid target.json")
+        |> snag.context(dir_name),
+      )
+
+      let runtime_binary = runtime_binary_path(cache, target)
+      let otp_directory = otp_dir_path(cache, target)
+
+      case
+        simplifile.is_file(runtime_binary),
+        simplifile.is_directory(otp_directory)
+      {
+        Ok(True), Ok(True) ->
+          Ok([InstalledTarget(target:, runtime_binary:, otp_directory:), ..acc])
+        _, _ -> Ok(acc)
+      }
+    }
+  }
 }
 
 pub fn install(target: Target) -> Result(InstalledTarget, Snag) {
@@ -239,11 +343,34 @@ pub fn uninstall(target: Target) -> Result(Nil, Snag) {
   )
 
   // GC: only remove OTP if no other installed targets still use this version.
-  let otp_still_needed =
-    list.any(targets, fn(other) {
-      other.otp_version == target.otp_version
-      && simplifile.is_directory(runtime_dir_path(cache, other)) == Ok(True)
-    })
+  let runtime_base = filepath.join(cache, "runtime")
+  use otp_still_needed <- result.try(
+    case simplifile.read_directory(runtime_base) {
+      Error(simplifile.Enoent) -> Ok(False)
+      other -> {
+        use dirs <- result.try(
+          other |> snag.map_error(simplifile.describe_error),
+        )
+        list.try_fold(dirs, False, fn(acc, dir_name) {
+          let json_path =
+            filepath.join(runtime_base, dir_name)
+            |> filepath.join("target.json")
+          case simplifile.read(json_path) {
+            Error(simplifile.Enoent) -> Ok(acc)
+            other -> {
+              use s <- result.try(
+                other |> snag.map_error(simplifile.describe_error),
+              )
+              json.parse(s, target_decoder())
+              |> result.map(fn(t) { acc || t.otp_version == target.otp_version })
+              |> snag.replace_error("Invalid target.json")
+              |> snag.context(dir_name)
+            }
+          }
+        })
+      }
+    },
+  )
 
   use Nil <- result.try(case otp_still_needed {
     True -> Ok(Nil)
@@ -265,15 +392,19 @@ fn install_runtime(cache_dir: String, target: Target) -> Result(String, Snag) {
   let Target(runtime_link: link, runtime_hash: hash, ..) = target
   let path = runtime_binary_path(cache_dir, target)
   let target_dir = filepath.directory_name(path)
-  let rev_path = revision_file_path(cache_dir, target)
+  let json_path = filepath.join(target_dir, "target.json")
 
   // If the directory already exists but the revision is stale or absent,
   // remove it so that download() re-fetches rather than bailing out early.
-  let is_stale = case simplifile.is_directory(target_dir), simplifile.read(rev_path) {
-    Ok(True), Ok(rev) -> string.trim(rev) != target.revision
-    Ok(True), Error(_) -> True
-    _, _ -> False
+  let is_stale = case simplifile.read(json_path) {
+    Ok(target_json) ->
+      case json.parse(target_json, target_decoder()) {
+        Ok(installed) -> installed.revision != target.revision
+        Error(_) -> True
+      }
+    Error(_) -> simplifile.is_directory(target_dir) == Ok(True)
   }
+
   use Nil <- result.try(case is_stale {
     True ->
       simplifile.delete(target_dir)
@@ -281,12 +412,12 @@ fn install_runtime(cache_dir: String, target: Target) -> Result(String, Snag) {
     False -> Ok(Nil)
   })
 
-  use Nil <- result.try(
-    download("gleepack " <> slug(target), target_dir, link, hash),
-  )
+  use Nil <- result.try({
+    download("gleepack " <> slug(target), target_dir, link, hash)
+  })
 
   use Nil <- result.try(
-    simplifile.write(rev_path, target.revision)
+    simplifile.write(json_path, json.to_string(target_to_json(target)))
     |> snag.map_error(simplifile.describe_error),
   )
 
@@ -368,11 +499,6 @@ fn do_validate_hash(hash_algorithm, body, hex) {
         <> bit_array.base16_encode(actual),
       )
   }
-}
-
-fn revision_file_path(cache_dir: String, target: Target) -> String {
-  runtime_dir_path(cache_dir, target)
-  |> filepath.join("revision")
 }
 
 fn runtime_dir_path(cache_dir: String, target: Target) -> String {
