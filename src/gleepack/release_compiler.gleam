@@ -30,10 +30,13 @@ import snag.{type Snag}
 /// walking their `applications` dependencies transitively.
 ///
 /// Any app listed in an `applications` field that is not itself a compiled
-/// dependency is treated as an OTP app from the toolchain.
+/// dependency is treated as an OTP app from the toolchain. Debug/Shell modes
+/// additionally seed `eunit`, which is needed to run the project's test
+/// modules but is not listed in any `.app` file's `applications`.
 pub fn discover_otp_apps(
   dependencies: List(Project),
   otp_directory: String,
+  mode: Mode,
 ) -> Result(List(String), Snag) {
   let project_apps = set.from_list(list.map(dependencies, fn(d) { d.otp_app }))
 
@@ -51,8 +54,13 @@ pub fn discover_otp_apps(
     }),
   )
 
+  let extra_apps = case mode.includes_dev(mode) {
+    True -> ["eunit"]
+    False -> []
+  }
+
   let otp_seed =
-    ["kernel", "stdlib", ..seed]
+    ["kernel", "stdlib", ..list.append(extra_apps, seed)]
     |> list.filter(fn(a) { !set.contains(project_apps, a) })
     |> list.unique
 
@@ -193,9 +201,10 @@ pub fn assemble(
   entrypoint_beam entrypoint_beam: option.Option(BitArray),
   dependencies dependencies: List(Project),
   otp_directory otp_directory: String,
+  mode mode: Mode,
 ) -> Result(BitArray, Snag) {
   use otp_apps <- result.try(
-    discover_otp_apps(dependencies, otp_directory)
+    discover_otp_apps(dependencies, otp_directory, mode)
     |> snag.context("Discovering OTP application dependencies"),
   )
   use dep_files <- result.try(
@@ -311,6 +320,7 @@ fn do_build(
     entrypoint_beam:,
     dependencies:,
     otp_directory: target.otp_directory,
+    mode:,
   )
 }
 

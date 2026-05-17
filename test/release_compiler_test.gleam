@@ -5,6 +5,7 @@ import gleam/option.{None}
 import gleam/string
 import gleepack/app_file
 import gleepack/config
+import gleepack/mode
 import gleepack/project
 import gleepack/release_compiler
 import simplifile
@@ -35,7 +36,7 @@ pub fn discover_otp_apps_always_includes_kernel_stdlib_test() {
   let otp_dir = filepath.join(config.build_dir, "_test_disc_ks")
   let assert Ok(Nil) = simplifile.create_directory_all(otp_dir)
 
-  let assert Ok(apps) = release_compiler.discover_otp_apps([], otp_dir)
+  let assert Ok(apps) = release_compiler.discover_otp_apps([], otp_dir, mode.Release(module: "m"))
   assert list.contains(apps, "kernel")
   assert list.contains(apps, "stdlib")
 
@@ -80,7 +81,7 @@ pub fn discover_otp_apps_reads_applications_from_app_files_test() {
 
   let dep = make_dep(dep_name, dep_name, ".")
 
-  let assert Ok(apps) = release_compiler.discover_otp_apps([dep], otp_dir)
+  let assert Ok(apps) = release_compiler.discover_otp_apps([dep], otp_dir, mode.Release(module: "m"))
   assert list.contains(apps, "kernel")
   assert list.contains(apps, "stdlib")
 
@@ -105,7 +106,7 @@ pub fn discover_otp_apps_collects_transitively_test() {
 
   let dep = make_dep(dep_name, dep_name, ".")
 
-  let assert Ok(apps) = release_compiler.discover_otp_apps([dep], otp_dir)
+  let assert Ok(apps) = release_compiler.discover_otp_apps([dep], otp_dir, mode.Release(module: "m"))
   assert list.contains(apps, "kernel")
   assert list.contains(apps, "stdlib")
 
@@ -130,6 +131,7 @@ pub fn discover_otp_apps_excludes_project_deps_test() {
     release_compiler.discover_otp_apps(
       [make_dep(dep_a, dep_a, "."), make_dep(dep_b, dep_b, ".")],
       otp_dir,
+      mode.Release(module: "m"),
     )
 
   // dep_b is a project dep and must not appear as an OTP app
@@ -160,6 +162,7 @@ pub fn discover_otp_apps_deduplicates_test() {
     release_compiler.discover_otp_apps(
       [make_dep(dep_a, dep_a, "."), make_dep(dep_b, dep_b, ".")],
       otp_dir,
+      mode.Release(module: "m"),
     )
 
   let kernel_count = list.filter(apps, fn(a) { a == "kernel" }) |> list.length
