@@ -1661,7 +1661,7 @@ static void forker_ready_input(ErlDrvData e, ErlDrvEvent event)
         if (port_id != THE_NON_VALUE) {
             int err;
             if (WIFEXITED(status))
-                err = 0;
+                err = WEXITSTATUS(status);
             else if (WIFSIGNALED(status))
                 err = EINTR;
             else
