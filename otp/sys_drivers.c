@@ -1655,19 +1655,12 @@ static void forker_ready_input(ErlDrvData e, ErlDrvEvent event)
     /* Drain all bytes from the pipe */
     while (read(forker_pipe[0], buf, sizeof(buf)) > 0)
         ;
-    /* Now reap all finished children */
+    /* Now reap all finished children. Pass the raw waitpid status through;
+       port_inp_failure decodes it via WIFSIGNALED/WEXITSTATUS exactly once. */
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
         Eterm port_id = remove_os_pid_mapping(pid);
-        if (port_id != THE_NON_VALUE) {
-            int err;
-            if (WIFEXITED(status))
-                err = WEXITSTATUS(status);
-            else if (WIFSIGNALED(status))
-                err = EINTR;
-            else
-                err = ECHILD;
-            forker_sigchld(port_id, err);
-        }
+        if (port_id != THE_NON_VALUE)
+            forker_sigchld(port_id, status);
     }
 }
 
