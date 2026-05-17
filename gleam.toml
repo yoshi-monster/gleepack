@@ -24,6 +24,18 @@ gleam_crypto = ">= 1.5.1 and < 2.0.0"
 input = ">= 1.0.1 and < 2.0.0"
 gleam_deque = ">= 1.0.0 and < 2.0.0"
 gleam_json = ">= 3.1.0 and < 4.0.0"
+temporary = ">= 1.0.0 and < 2.0.0"
 
 [dev_dependencies]
 gleeunit = ">= 1.9.0 and < 2.0.0"
+
+[tools.gleepack]
+
+output = "dist/gleepack"
+
+targets = [
+    "aarch64-linux-otp-29.0",
+    "aarch64-macos-otp-29.0",
+    "amd64-linux-otp-29.0",
+    "amd64-win32-otp-29.0"
+]

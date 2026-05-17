@@ -12,6 +12,7 @@ import gleepack/target
 import glint.{type Command}
 import simplifile
 import snag.{type Snag}
+import temporary
 
 pub fn command() -> Command(Result(Nil, Snag)) {
   use <- glint.command_help(
@@ -87,32 +88,19 @@ Defaults to the highest available OTP version for the current platform.
         }
       })
 
-      let tmp_base = filepath.join(config.build_dir, "gleepack-run-tmp")
-
-      use pairs <- result.try({
-        build.build(project, available, [#(target, tmp_base)], module)
-      })
-
-      let assert [#(_, tmp_path)] = pairs
-
-      let status =
-        case
-          child_process.from_file(tmp_path)
-          |> child_process.args(args)
-          |> child_process.run(stdio.inherit())
-        {
-          Ok(child_process.Output(status_code: 0, output: _)) -> Ok(Nil)
-          Ok(child_process.Output(status_code:, output: _)) ->
-            snag.error(
-              "Command failed with status code " <> int.to_string(status_code),
-            )
-          Error(error) -> snag.error(child_process.describe_start_error(error))
-        }
-        |> snag.context("Running " <> target.slug(target))
-
-      let _ = simplifile.delete(tmp_path)
-
-      status
+      case
+        temporary.create(
+          temporary.file()
+            |> temporary.in_directory("build")
+            |> temporary.with_prefix(project.name <> "-"),
+          run: build_and_run(_, project, available, target, module, args),
+        )
+      {
+        Ok(result) -> result
+        Error(file_error) ->
+          snag.error(simplifile.describe_error(file_error))
+          |> snag.context("Creating temporary file")
+      }
     }
 
     project.Gleam(target: Some(project.Javascript), ..) ->
@@ -125,4 +113,26 @@ Defaults to the highest available OTP version for the current platform.
         "Expected a Gleam project but found a non-Gleam project at current directory",
       )
   }
+}
+
+fn build_and_run(tmp_path, project, available, target, module, args) {
+  use pairs <- result.try({
+    build.build(project, available, [#(target, tmp_path)], module)
+  })
+
+  let assert [#(_, tmp_path)] = pairs
+
+  case
+    child_process.from_file(tmp_path)
+    |> child_process.args(args)
+    |> child_process.run(stdio.inherit())
+  {
+    Ok(child_process.Output(status_code: 0, output: _)) -> Ok(Nil)
+    Ok(child_process.Output(status_code:, output: _)) ->
+      snag.error(
+        "Command failed with status code " <> int.to_string(status_code),
+      )
+    Error(error) -> snag.error(child_process.describe_start_error(error))
+  }
+  |> snag.context("Running " <> tmp_path)
 }
