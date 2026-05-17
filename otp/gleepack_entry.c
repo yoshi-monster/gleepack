@@ -34,9 +34,14 @@ int g_debug = 0; /* read by unix_prim_file.c / win_prim_file.c via gleepack_vfs.
 #if defined(__WIN32__)
 #  include <windows.h>
 #  include <io.h>
+/* STATIC_ERLANG_NIF: bypass the WinDynNifCallbacks redirect in erl_nif.h, since
+ * we are linked into ERTS itself rather than dynamically loaded as a NIF. */
+#  define STATIC_ERLANG_NIF
+#  include "erl_nif.h"
 #else
 #  include <unistd.h>
 #  include <fcntl.h>
+#  include <signal.h>
 #  include <sys/mman.h>
 #  include <sys/stat.h>
 #endif
@@ -487,6 +492,89 @@ static char **parse_erl_args(const uint8_t *data, size_t size, int *out_argc)
     return args;
 }
 
+/* -- Graceful shutdown on Ctrl-C --------------------------------------------
+ *
+ * Install a Ctrl-C handler that routes into `init:stop/0` so the full OTP
+ * shutdown sequence runs (applications stopped in reverse order, supervisors
+ * propagate `shutdown`, gen_servers' terminate/2 runs).
+ *
+ * We install eagerly here, before erl_start. Stock BEAM's `+B` flag handling
+ * runs later inside erl_start and decides whether to overwrite us:
+ *
+ *   - default / `+Bc`: init_break_handler runs, overwrites SIGINT with
+ *     request_break -> user gets the stock BREAK menu, as they would on
+ *     unmodified Erlang. (Same on Windows: BEAM's console ctrl handler is
+ *     added on top of ours and Windows runs the most-recent first.)
+ *   - `+Bi`: BEAM installs SIG_IGN, overwriting us -> Ctrl-C ignored, as
+ *     the user explicitly requested.
+ *   - `+Bd`: BEAM does not touch the handler -> ours survives and graceful
+ *     shutdown via init:stop/0 takes effect.
+ *
+ * The gleepack default emu_args includes `+Bd`. Users overriding emu_args
+ * keep whatever `+B` semantics they choose.
+ */
+#if !defined(__WIN32__)
+/* POSIX: re-raise as SIGTERM. BEAM unconditionally installs a generic
+ * handler for SIGTERM (sys/unix/sys.c erts_sys_unix_later_init), which
+ * dispatches into erl_signal_server, whose default handler in OTP's kernel
+ * application already calls init:stop/0. So we just borrow that chain.
+ *
+ * kill() is on POSIX's async-signal-safe whitelist; nothing else here is. */
+static void sigint_to_sigterm(int signo)
+{
+    (void)signo;
+    kill(getpid(), SIGTERM);
+}
+
+static void install_sigint_handler(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigint_to_sigterm;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGINT, &sa, NULL);
+}
+#else
+/* Windows: BEAM has no signal-dispatcher equivalent and `os:set_signal/2`
+ * is a stub returning false on win32. Instead we install a console ctrl
+ * handler — which runs on a Windows-spawned thread (not a signal context,
+ * so the async-signal-safe restrictions do not apply) — and use the NIF
+ * API to deliver `init:stop()`'s on-the-wire message ({stop, stop}) to the
+ * registered `init` process. See `stop/0` in erts/preloaded/src/init.erl.
+ *
+ * If `init` is not yet registered (Ctrl-C between handler install and VM
+ * coming up), enif_whereis_pid fails and we return FALSE so Windows applies
+ * its default action — termination, same as today's stock behaviour. */
+static BOOL WINAPI gleepack_ctrl_handler(DWORD ctrl_type)
+{
+    if (ctrl_type != CTRL_C_EVENT && ctrl_type != CTRL_BREAK_EVENT) {
+        return FALSE;
+    }
+
+    ErlNifEnv *env = enif_alloc_env();
+    if (!env) return FALSE;
+
+    ErlNifPid init_pid;
+    ERL_NIF_TERM init_name = enif_make_atom(env, "init");
+    BOOL handled = FALSE;
+    if (enif_whereis_pid(env, init_name, &init_pid)) {
+        ERL_NIF_TERM stop = enif_make_atom(env, "stop");
+        ERL_NIF_TERM msg  = enif_make_tuple2(env, stop, stop);
+        if (enif_send(NULL, &init_pid, env, msg)) {
+            handled = TRUE;
+        }
+    }
+    enif_free_env(env);
+    return handled;
+}
+
+static void install_sigint_handler(void)
+{
+    SetConsoleCtrlHandler(gleepack_ctrl_handler, TRUE);
+}
+#endif
+
 /* -- Entry point ------------------------------------------------------------ */
 
 int
@@ -496,6 +584,7 @@ main(int argc, char **argv)
     /* Must be done before we have a chance to spawn any scheduler threads. */
     sys_init_signal_stack();
 #endif
+    install_sigint_handler();
 
     g_debug = (getenv("GLEEPACK_DEBUG") != NULL);
 

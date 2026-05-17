@@ -738,9 +738,13 @@ static ErlDrvData spawn_start(ErlDrvPort port_num, char* name,
         if (wd)
             posix_spawn_file_actions_addchdir_np(&fa, wd);
 
-        /* New session — prevents terminal signal interference, same as
-         * erl_child_setup which called setsid() explicitly (T-03.2-03). */
-        posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+        /* We deliberately do NOT use POSIX_SPAWN_SETSID here, even though
+         * stock erl_child_setup calls setsid() unconditionally. Detaching
+         * the child into its own session means terminal signals (SIGINT
+         * from Ctrl-C, SIGHUP on disconnect) never reach it — so when the
+         * parent BEAM dies the child is orphaned and keeps running. Leaving
+         * the child in BEAM's process group makes Ctrl-C tear down the
+         * whole tree, which is what users of a CLI-building tool expect. */
 
         /* Build environment.
          * If opts->envir has explicit variables, build a char** from them.
