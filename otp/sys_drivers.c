@@ -699,9 +699,35 @@ static ErlDrvData spawn_start(ErlDrvPort port_num, char* name,
         posix_spawn_file_actions_init(&fa);
         posix_spawnattr_init(&attr);
 
-        /* Route child stdin/stdout/stderr to our pipes */
-        posix_spawn_file_actions_adddup2(&fa, ofd[0], STDIN_FILENO);
-        posix_spawn_file_actions_adddup2(&fa, ifd[1], STDOUT_FILENO);
+        /* Route child stdin/stdout based on opts->use_stdio and read_write.
+         *
+         * use_stdio (default): IPC pipes are dup2'd onto fd 0/1 — the child
+         * reads BEAM's output on stdin and writes its own output to BEAM via
+         * stdout.
+         *
+         * nouse_stdio (port opened with {nouse_stdio,...}): IPC pipes go to
+         * fd 3/4 instead, leaving fd 0/1 inherited from the parent. This is
+         * what gleam's child_process `inherit` mode wants — the spawned
+         * process's stdout/stdin remain wired to the user's terminal.
+         *
+         * Each dup2 is gated on the matching read_write bit so ports opened
+         * with just [in] or [out] don't end up with a half-connected pipe
+         * stranded in the child: DO_WRITE means BEAM writes to the child's
+         * stdin; DO_READ means BEAM reads the child's stdout.
+         *
+         * stderr is always handled separately via stderrfd, which is already
+         * either ifd[1] (redir_stderr) or dup(2) (inherit parent stderr). */
+        if (opts->use_stdio) {
+            if (opts->read_write & DO_WRITE)
+                posix_spawn_file_actions_adddup2(&fa, ofd[0], STDIN_FILENO);
+            if (opts->read_write & DO_READ)
+                posix_spawn_file_actions_adddup2(&fa, ifd[1], STDOUT_FILENO);
+        } else {
+            if (opts->read_write & DO_WRITE)
+                posix_spawn_file_actions_adddup2(&fa, ofd[0], 3);
+            if (opts->read_write & DO_READ)
+                posix_spawn_file_actions_adddup2(&fa, ifd[1], 4);
+        }
         posix_spawn_file_actions_adddup2(&fa, stderrfd, STDERR_FILENO);
 
         /* Close BEAM-side ends in the child to avoid fd leak */
