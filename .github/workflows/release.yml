@@ -1,0 +1,42 @@
+name: Release gleepack
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27"
+          gleam-version: "1.16.0"
+
+      - name: Build
+        run: gleam run build
+
+      - name: Create release
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "gleepack ${GITHUB_REF_NAME#v}" \
+            --notes "gleepack ${GITHUB_REF_NAME#v}" \
+            --target ${{ github.sha }} \
+            --repo ${{ github.repository }} || true
+
+      - name: Upload binaries
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            dist/* \
+            --repo ${{ github.repository }} \
+            --clobber
