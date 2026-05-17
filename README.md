@@ -23,7 +23,10 @@ Please use a full OTP release or a gleam erlang-shipment for this.
 
 ## Installation
 
-Install `gleepack` as a Gleam dev dependency in your app:
+Download the right binary from one of the `gleepack` releases on the
+[releases](https://github.com/yoshi-monster/gleepack/releases) page.
+
+Altneratively, you can install `gleepack` as a Gleam dev dependency in your app:
 
 ```toml
 [dev_dependencies]
@@ -37,12 +40,16 @@ gleepack = { git = "git@github.com:yoshi-monster/gleepack.git", ref = "main" }
 From inside a Gleam project:
 
 ```sh
+gleepack build
+
+# or when using the gleam dependency:
 gleam run -m gleepack build
 ```
 
-
 This produces `./build/<project-name>` by default. On the first run, gleepack
 downloads the runtime and OTP toolchain for your current platform automatically.
+
+Running `gleepack` without arguments outputs useful information about all available commands.
 
 #### Flags
 
@@ -60,7 +67,7 @@ Flags can also be set permanently in your `gleam.toml`:
 [tools.gleepack]
 output = "dist/myapp"
 module = "myapp/cli"
-targets = ["aarch64-macos-otp-28.4.2", "amd64-linux-otp-28.4.2"]
+targets = ["aarch64-macos-otp-29.0", "amd64-linux-otp-29.0"]
 ```
 
 ### Targets
@@ -70,12 +77,30 @@ The default target matches your current platform.
 
 | Target slug | Platform |
 |-------------|----------|
-| `aarch64-macos-otp-28.4.2` | Apple Silicon macOS |
-| `amd64-linux-otp-28.4.2` | x86-64 Linux |
-| `aarch64-linux-otp-28.4.2` | ARM64 Linux |
-| `amd64-windows-otp-28.4.2` | x86-64 Windows |
+| `aarch64-macos-otp-29.0` | Apple Silicon macOS |
+| `amd64-linux-otp-29.0` | x86-64 Linux |
+| `aarch64-linux-otp-29.0` | ARM64 Linux |
+| `amd64-windows-otp-29.0` | x86-64 Windows |
 
-Use the `gleam run -m gleepack targets` subcommands to list, add, or remove targets.
+Use the `gleepack targets` subcommands to list, add, or remove targets.
+
+## Using `gleepack` as a replacement for Erlang
+
+When developing, you can download and use the `gleepack` binary from the
+[releases](https://github.com/yoshi-monster/gleepack/releases) page
+to replace the need to install Erlang on your devlopment machine.
+
+Instead of using `gleam run`, you can run your project using `gleepack`.
+
+```shell
+# run the project using gleepack
+gleepack run
+gleepack test
+gleepack dev
+
+# run a module using gleepack
+gleepack run --module lustre/dev start
+```
 
 ## How it works
 
@@ -89,8 +114,7 @@ to minimise bundle size.
 ### 2. Assemble a release archive
 
 The compiled `.beam` files, private directories, and OTP library modules
-are zipped into an in-memory archive. Required applications are discovered
-by reading the built `.app` files.
+are zipped into an Erlang release archive.
 
 ### 3. Stamp
 
@@ -150,6 +174,15 @@ The patched BEAM removes this helper and replaces it with direct
 Port programs and spawned OS processes are managed through `erl_child_spawn`
 on Unix systems, another OTP helper binary. Gleepack replaces this program
 with direct `posix_spawn` calls.
+
+One small behavioural difference falls out of this: stock OTP calls
+`setsid()` in spawned children, putting each one in its own session detached
+from the controlling terminal. Gleepack does not. Children stay in the
+parent's process group, so terminal signals (Ctrl-C, SIGHUP on disconnect)
+reach them too. This means a long-running subprocess dies with the parent
+instead of being orphaned — the behaviour you'd want from a CLI tool, but a
+divergence from what an Erlang application linked against stock OTP would
+see.
 
 ## Contributing
 
