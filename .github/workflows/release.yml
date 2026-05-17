@@ -40,9 +40,21 @@ jobs:
             --target ${{ github.sha }} \
             --repo ${{ github.repository }} || true
 
-      - name: Upload binaries
+      - name: Package and upload binaries
         run: |
+          for binary in dist/gleepack-*; do
+            filename=$(basename "$binary")
+            if [[ "$filename" == *.exe ]]; then
+              slug="${filename#gleepack-}"; slug="${slug%.exe}"
+              exe="gleepack.exe"
+            else
+              slug="${filename#gleepack-}"
+              exe="gleepack"
+            fi
+            cp "$binary" "/tmp/$exe"
+            (cd /tmp && zip "${slug}.zip" "$exe" && rm "$exe")
+          done
           gh release upload "${{ github.ref_name }}" \
-            dist/* \
+            /tmp/*.zip \
             --repo ${{ github.repository }} \
             --clobber
