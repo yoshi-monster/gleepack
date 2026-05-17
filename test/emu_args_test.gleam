@@ -76,7 +76,7 @@ pub fn render_default_test() {
       "-L", "-d", "-Bd", "-P", "65536", "-Q", "1024", "-sbtu", "-A0", "--",
       "-root", "/__gleepack__", "-bindir", "/__gleepack__/bin", "-boot",
       "/__gleepack__/start", "-run", "gleepack_main", "main", "-noshell",
-      "-noinput", "-mode", "interactive", "-start_epmd", "false", "-dist_listen",
+      "-mode", "interactive", "-start_epmd", "false", "-dist_listen",
       "false",
     ]
 }

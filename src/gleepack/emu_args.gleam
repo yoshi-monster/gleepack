@@ -16,7 +16,7 @@ pub type EmuArgs {
 }
 
 /// Default value for the `extra_emu_args` config key.
-pub const default = "+L +d +Bd +P 65536 +Q 1024 +sbtu +A0 -noshell -noinput -mode interactive -start_epmd false -dist_listen false"
+pub const default = "+L +d +Bd +P 65536 +Q 1024 +sbtu +A0 -noshell -mode interactive -start_epmd false -dist_listen false"
 
 type Section {
   Beam
