@@ -89,7 +89,7 @@ key `tools." <> config.app_name <> ".targets`.
         module(flags)
         |> result.unwrap(project.module |> option.unwrap(project.name))
 
-      use targets <- result.try(case targets(flags) {
+      use resolved_targets <- result.try(case targets(flags) {
         Error(_) | Ok([]) ->
           case project.targets {
             [] ->
@@ -109,87 +109,23 @@ key `tools." <> config.app_name <> ".targets`.
           })
       })
 
-      use _ <- result.try(run("gleam", in: ".", with: ["deps", "download"]))
-
-      // Download deps for local (path) dependencies so their manifest.toml
-      // files exist before we do the full manifest read.
-      use local_manifest <- result.try(
-        project.manifest() |> snag.context("Reading project manifest"),
-      )
-      use _ <- result.try(
-        dict.values(local_manifest)
-        |> list.filter_map(fn(p) {
-          case p {
-            project.Gleam(is_local: True, src:, ..) -> Ok(src)
-            _ -> Error(Nil)
-          }
-        })
-        |> list.try_map(fn(src) {
-          run("gleam", in: src, with: ["deps", "download"])
-        }),
-      )
-
-      use manifest <- result.try(
-        project.manifest() |> snag.context("Reading project manifest"),
-      )
-
-      use compile_dependencies <- result.try(
-        dependency.all(project, manifest)
-        |> snag.context("Resolving all dependencies"),
-      )
-      use dependencies <- result.try(
-        dependency.production(project, manifest)
-        |> snag.context("Resolving production dependencies"),
-      )
-
-      let multi_target = case targets {
+      let multi_target = case resolved_targets {
         [] | [_] -> False
         _ -> True
       }
 
-      use grouped_targets <- result.try(
-        list.try_fold(targets, dict.new(), fn(groups, target) {
-          case target.matching_native(available, matching: target) {
-            Ok(compile_target) -> {
-              let groups =
-                dict.upsert(groups, compile_target, fn(targets) {
-                  [target, ..option.unwrap(targets, [])]
-                })
-              Ok(groups)
-            }
-            Error(_) ->
-              snag.error(
-                "No native toolchain available for " <> target.slug(target),
-              )
+      let target_pairs =
+        list.map(resolved_targets, fn(target) {
+          let output = case multi_target {
+            True -> output <> "-" <> target.slug(target)
+            False -> output
           }
-        }),
-      )
 
-      use #(compile_target, runtime_targets) <- list.try_each(dict.to_list(
-        grouped_targets,
-      ))
+          #(target, output)
+        })
 
-      use compile_installed <- result.try(
-        target.install(compile_target)
-        |> snag.context(
-          "Installing compile toolchain " <> target.slug(compile_target),
-        ),
-      )
-
-      use zip <- result.try(
-        release_compiler.build(
-          project:,
-          module:,
-          dependencies:,
-          compile_dependencies:,
-          target: compile_installed,
-        )
-        |> snag.context("Building release for " <> target.slug(compile_target)),
-      )
-
-      use runtime_target <- list.try_each(runtime_targets)
-
-      stamp(zip, runtime_target, output, multi_target)
+      build(project, available, target_pairs, module)
+      |> result.replace(Nil)
     }
 
     project.Gleam(target: Some(project.Javascript), ..) ->
@@ -204,12 +140,64 @@ key `tools." <> config.app_name <> ".targets`.
   }
 }
 
-fn stamp(
-  zip: BitArray,
-  runtime_target: target.Target,
-  out: String,
-  multi_target: Bool,
-) -> Result(Nil, Snag) {
+pub fn build(
+  project project: project.Project,
+  available available: List(target.Target),
+  targets targets: List(#(target.Target, String)),
+  module module: String,
+) -> Result(List(#(target.Target, String)), Snag) {
+  use _ <- result.try(run("gleam", in: ".", with: ["deps", "download"]))
+
+  // Download deps for local (path) dependencies so their manifest.toml
+  // files exist before we do the full manifest read.
+  use local_manifest <- result.try(
+    project.manifest() |> snag.context("Reading project manifest"),
+  )
+  use _ <- result.try(download_path_deps(local_manifest))
+
+  use manifest <- result.try(
+    project.manifest() |> snag.context("Reading project manifest"),
+  )
+
+  use compile_dependencies <- result.try(
+    dependency.all(project, manifest)
+    |> snag.context("Resolving all dependencies"),
+  )
+  use dependencies <- result.try(
+    dependency.production(project, manifest)
+    |> snag.context("Resolving production dependencies"),
+  )
+
+  use grouped_targets <- result.try(group_targets(available, targets))
+
+  use built_pairs, #(compile_target, runtime_pairs) <- list.try_fold(
+    dict.to_list(grouped_targets),
+    [],
+  )
+
+  use compile_installed <- result.try(
+    target.install(compile_target)
+    |> snag.context(
+      "Installing compile toolchain " <> target.slug(compile_target),
+    ),
+  )
+
+  use zip <- result.try(
+    release_compiler.build(
+      project:,
+      module:,
+      dependencies:,
+      compile_dependencies:,
+      target: compile_installed,
+    )
+    |> snag.context("Building release for " <> target.slug(compile_target)),
+  )
+
+  use built_pairs, #(runtime_target, base_path) <- list.try_fold(
+    runtime_pairs,
+    built_pairs,
+  )
+
   use runtime_installed <- result.try(
     target.install(runtime_target)
     |> snag.context("Installing runtime " <> target.slug(runtime_target)),
@@ -221,15 +209,10 @@ fn stamp(
     |> snag.context("Reading runtime binary"),
   )
 
-  let output_path = case multi_target {
-    True -> out <> "-" <> target.slug(runtime_target)
-    False -> out
-  }
-
   // Preserve the runtime binary's extension (e.g. .exe on Windows).
   let output_path = case filepath.extension(runtime_installed.runtime_binary) {
-    Ok(ext) -> output_path <> "." <> ext
-    Error(Nil) -> output_path
+    Ok(ext) -> base_path <> "." <> ext
+    Error(Nil) -> base_path
   }
 
   use Nil <- result.try(
@@ -252,7 +235,37 @@ fn stamp(
 
   io.println(ansi.pink("      Built ") <> output_path)
 
-  Ok(Nil)
+  Ok([#(runtime_target, output_path), ..built_pairs])
+}
+
+fn download_path_deps(
+  local_manifest: dict.Dict(String, project.Project),
+) -> Result(Nil, Snag) {
+  use project <- list.try_each(dict.values(local_manifest))
+  case project {
+    project.Gleam(is_local: True, src:, ..) ->
+      run("gleam", in: src, with: ["deps", "download"])
+
+    _ -> Ok(Nil)
+  }
+}
+
+fn group_targets(
+  available: List(target.Target),
+  targets: List(#(target.Target, String)),
+) {
+  use groups, #(target, out) <- list.try_fold(targets, dict.new())
+  case target.matching_native(available, matching: target) {
+    Ok(compile_target) -> {
+      let groups =
+        dict.upsert(groups, compile_target, fn(pairs) {
+          [#(target, out), ..option.unwrap(pairs, [])]
+        })
+      Ok(groups)
+    }
+    Error(_) ->
+      snag.error("No native toolchain available for " <> target.slug(target))
+  }
 }
 
 fn run(
