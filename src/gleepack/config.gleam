@@ -7,6 +7,8 @@ pub const app_name = "gleepack"
 
 pub const build_dir = "build/" <> app_name
 
+pub const packages_dir = "build/packages"
+
 pub fn cache_dir() {
   case envoy.get("GLEEPACK_CACHE_DIR") {
     Ok(dir) -> dir

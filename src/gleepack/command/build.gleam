@@ -1,8 +1,5 @@
-import child_process
-import child_process/stdio
 import filepath
 import gleam/dict
-import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{None, Some}
@@ -11,6 +8,7 @@ import gleam/string
 import gleam_community/ansi
 import gleepack/config
 import gleepack/dependency
+import gleepack/mode.{type Mode}
 import gleepack/project
 import gleepack/release_compiler
 import gleepack/target
@@ -124,7 +122,7 @@ key `tools." <> config.app_name <> ".targets`.
           #(target, output)
         })
 
-      build(project, available, target_pairs, module)
+      build(project, available, target_pairs, mode.Release(module:))
       |> result.replace(Nil)
     }
 
@@ -144,19 +142,10 @@ pub fn build(
   project project: project.Project,
   available available: List(target.Target),
   targets targets: List(#(target.Target, String)),
-  module module: String,
+  mode mode: Mode,
 ) -> Result(List(#(target.Target, String)), Snag) {
-  use _ <- result.try(run("gleam", in: ".", with: ["deps", "download"]))
-
-  // Download deps for local (path) dependencies so their manifest.toml
-  // files exist before we do the full manifest read.
-  use local_manifest <- result.try(
-    project.manifest() |> snag.context("Reading project manifest"),
-  )
-  use _ <- result.try(download_path_deps(local_manifest))
-
   use manifest <- result.try(
-    project.manifest() |> snag.context("Reading project manifest"),
+    dependency.download(available:) |> snag.context("Downloading dependencies"),
   )
 
   use compile_dependencies <- result.try(
@@ -164,8 +153,8 @@ pub fn build(
     |> snag.context("Resolving all dependencies"),
   )
   use dependencies <- result.try(
-    dependency.production(project, manifest)
-    |> snag.context("Resolving production dependencies"),
+    dependency.for_mode(mode, project, manifest)
+    |> snag.context("Resolving dependencies to bundle"),
   )
 
   use grouped_targets <- result.try(group_targets(available, targets))
@@ -185,7 +174,7 @@ pub fn build(
   use zip <- result.try(
     release_compiler.build(
       project:,
-      module:,
+      mode:,
       dependencies:,
       compile_dependencies:,
       target: compile_installed,
@@ -238,18 +227,6 @@ pub fn build(
   Ok([#(runtime_target, output_path), ..built_pairs])
 }
 
-fn download_path_deps(
-  local_manifest: dict.Dict(String, project.Project),
-) -> Result(Nil, Snag) {
-  use project <- list.try_each(dict.values(local_manifest))
-  case project {
-    project.Gleam(is_local: True, src:, ..) ->
-      run("gleam", in: src, with: ["deps", "download"])
-
-    _ -> Ok(Nil)
-  }
-}
-
 fn group_targets(
   available: List(target.Target),
   targets: List(#(target.Target, String)),
@@ -266,25 +243,4 @@ fn group_targets(
     Error(_) ->
       snag.error("No native toolchain available for " <> target.slug(target))
   }
-}
-
-fn run(
-  command: String,
-  in directory: String,
-  with args: List(String),
-) -> Result(Nil, Snag) {
-  case
-    child_process.from_name(command)
-    |> child_process.cwd(directory)
-    |> child_process.args(args)
-    |> child_process.run(stdio.inherit())
-  {
-    Ok(child_process.Output(status_code: 0, output: _)) -> Ok(Nil)
-    Ok(child_process.Output(status_code:, output: _)) ->
-      snag.error(
-        "Command failed with status code " <> int.to_string(status_code),
-      )
-    Error(error) -> snag.error(child_process.describe_start_error(error))
-  }
-  |> snag.context("Running " <> command <> " " <> string.join(args, " "))
 }

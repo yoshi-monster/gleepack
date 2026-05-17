@@ -188,32 +188,24 @@ fn parse_project(
 
 // -- MANIFEST ----------------------------------------------------------------
 
-pub fn manifest() -> Result(Manifest, Snag) {
-  manifest_from(".")
+pub fn manifest(available: List(target.Target)) -> Result(Manifest, Snag) {
+  manifest_from(".", available)
 }
 
-/// Read a manifest.toml from the given directory.
-/// Also merges in manifests from any local (path) dependencies so that
-/// their dev-dependencies are visible during the full dependency walk.
-pub fn manifest_from(dir: String) -> Result(Manifest, Snag) {
-  use root <- result.try(read_manifest_packages(dir))
-
-  // For each local Gleam dep, read its own manifest.toml and add any
-  // entries that are not already present in the root manifest.
-  dict.values(root)
-  |> list.filter_map(fn(p) {
-    case p {
-      Gleam(is_local: True, src:, ..) -> Ok(src)
-      _ -> Error(Nil)
-    }
-  })
-  |> list.try_fold(root, fn(acc, src) {
-    read_manifest_packages(src)
-    |> result.map(dict.merge(_, acc))
-  })
+/// Read a manifest.toml from the given directory. `gleam deps download`
+/// resolves the full transitive closure of path deps into this single file,
+/// so no further merging is needed.
+pub fn manifest_from(
+  dir: String,
+  available: List(target.Target),
+) -> Result(Manifest, Snag) {
+  read_manifest_packages(dir, available)
 }
 
-fn read_manifest_packages(dir: String) -> Result(Manifest, Snag) {
+fn read_manifest_packages(
+  dir: String,
+  available: List(target.Target),
+) -> Result(Manifest, Snag) {
   let path = filepath.join(dir, "manifest.toml")
   use contents <- result.try(
     simplifile.read(path)
@@ -234,12 +226,16 @@ fn read_manifest_packages(dir: String) -> Result(Manifest, Snag) {
   )
 
   list.try_fold(packages, dict.new(), fn(acc, package) {
-    use project <- result.try(read_manifest_package(package, dir))
+    use project <- result.try(read_manifest_package(package, dir, available))
     Ok(dict.insert(acc, project.name, project))
   })
 }
 
-fn read_manifest_package(package: Toml, dir: String) -> Result(Project, Snag) {
+fn read_manifest_package(
+  package: Toml,
+  dir: String,
+  available: List(target.Target),
+) -> Result(Project, Snag) {
   use pkg <- result.try(
     package |> tom.as_table |> snag.map_error(tom_get_error),
   )
@@ -277,7 +273,7 @@ fn read_manifest_package(package: Toml, dir: String) -> Result(Project, Snag) {
 
   case build_tools_toml {
     [] -> snag.error("build_tools should not be empty")
-    [tom.String("gleam"), ..] -> read_internal(from: src, local: is_local, available: [])
+    [tom.String("gleam"), ..] -> read_internal(from: src, local: is_local, available:)
     [tom.String("rebar3"), ..] | [tom.String("rebar"), ..] ->
       Ok(Rebar3(name:, version:, otp_app:, dependencies:, is_dev: False, src:))
 

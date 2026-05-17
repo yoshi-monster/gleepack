@@ -1,8 +1,16 @@
+import child_process
+import child_process/stdio
+import filepath
 import gleam/dict
+import gleam/int
 import gleam/list
 import gleam/result
 import gleam/set.{type Set}
+import gleepack/config
+import gleepack/mode.{type Mode}
 import gleepack/project.{type Manifest, type Project}
+import gleepack/target
+import simplifile
 import snag.{type Snag}
 
 type StackItem {
@@ -10,7 +18,145 @@ type StackItem {
   Emit(Project)
 }
 
-pub fn production(
+/// Download all dependencies and prepare them for compilation.
+///
+/// Runs `gleam deps download` for the entry project — this resolves the
+/// full transitive closure of path deps into the root `manifest.toml`. Each
+/// path dep's `gleam.toml`, `src/`, and `priv/` (when present) is then
+/// mirrored into `build/packages/<name>` so that test/ and dev/ are not
+/// picked up by `gleam compile-package`. Mirroring prefers symlinks and
+/// falls back to copying when the platform does not support them.
+///
+/// The returned manifest has path deps' `src` rewritten to the mirror
+/// location.
+pub fn download(
+  available available: List(target.Target),
+) -> Result(Manifest, Snag) {
+  use _ <- result.try(gleam_deps_download("."))
+  use cwd <- result.try(
+    simplifile.current_directory()
+    |> snag.map_error(simplifile.describe_error)
+    |> snag.context("Reading current directory"),
+  )
+
+  use manifest <- result.try(project.manifest(available))
+
+  use rewritten <- result.try({
+    use acc, #(name, p) <- list.try_fold(dict.to_list(manifest), [])
+    case p {
+      project.Gleam(is_local: True, src:, name: dep_name, ..) if src != "." -> {
+        use _ <- result.map(mirror_path_dep(dep_name, src, cwd))
+        [#(name, project.Gleam(..p, src: mirror_dest(dep_name))), ..acc]
+      }
+      _ -> Ok([#(name, p), ..acc])
+    }
+  })
+
+  Ok(dict.from_list(rewritten))
+}
+
+fn mirror_dest(name: String) -> String {
+  filepath.join(config.packages_dir, name)
+}
+
+fn mirror_path_dep(
+  name: String,
+  src: String,
+  cwd: String,
+) -> Result(Nil, Snag) {
+  let dest = mirror_dest(name)
+  // Wipe any prior content so leftovers from previous runs (or whatever
+  // `gleam deps download` placed here) don't leak into the compile. Safe
+  // for symlinks too: simplifile.delete uses read_link_info, so symlink
+  // *targets* are not followed.
+  let _ = simplifile.delete(dest)
+  use _ <- result.try(
+    simplifile.create_directory_all(dest)
+    |> snag.map_error(simplifile.describe_error)
+    |> snag.context("Creating " <> dest),
+  )
+  use _ <- result.try(
+    mirror_entry(
+      filepath.join(src, "gleam.toml"),
+      filepath.join(dest, "gleam.toml"),
+      cwd,
+    )
+    |> snag.context("Mirroring gleam.toml from " <> src),
+  )
+  use _ <- result.try(
+    mirror_entry(filepath.join(src, "src"), filepath.join(dest, "src"), cwd)
+    |> snag.context("Mirroring src/ from " <> src),
+  )
+  let priv_src = filepath.join(src, "priv")
+  case simplifile.is_directory(priv_src) {
+    Ok(True) ->
+      mirror_entry(priv_src, filepath.join(dest, "priv"), cwd)
+      |> snag.context("Mirroring priv/ from " <> src)
+    _ -> Ok(Nil)
+  }
+}
+
+fn mirror_entry(
+  source: String,
+  dest: String,
+  cwd: String,
+) -> Result(Nil, Snag) {
+  let abs_source = case filepath.is_absolute(source) {
+    True -> source
+    False -> filepath.join(cwd, source)
+  }
+  case simplifile.create_symlink(to: abs_source, from: dest) {
+    Ok(_) -> Ok(Nil)
+    Error(_) -> copy_entry(source, dest)
+  }
+}
+
+fn copy_entry(source: String, dest: String) -> Result(Nil, Snag) {
+  case simplifile.is_directory(source) {
+    Ok(True) ->
+      simplifile.copy_directory(at: source, to: dest)
+      |> snag.map_error(simplifile.describe_error)
+      |> snag.context("Copying directory " <> source)
+    _ ->
+      simplifile.copy_file(at: source, to: dest)
+      |> snag.map_error(simplifile.describe_error)
+      |> snag.context("Copying file " <> source)
+  }
+}
+
+fn gleam_deps_download(in directory: String) -> Result(Nil, Snag) {
+  case
+    child_process.from_name("gleam")
+    |> child_process.cwd(directory)
+    |> child_process.args(["deps", "download"])
+    |> child_process.run(stdio.inherit())
+  {
+    Ok(child_process.Output(status_code: 0, output: _)) -> Ok(Nil)
+    Ok(child_process.Output(status_code:, output: _)) ->
+      snag.error(
+        "gleam deps download failed with status code "
+        <> int.to_string(status_code),
+      )
+    Error(error) -> snag.error(child_process.describe_start_error(error))
+  }
+  |> snag.context("Running gleam deps download in " <> directory)
+}
+
+/// Resolve the dependencies that should be bundled into the release for the
+/// given mode: production-only for `Release`, all dependencies (including dev)
+/// for `Debug` and `Shell`.
+pub fn for_mode(
+  mode: Mode,
+  project: Project,
+  manifest: Manifest,
+) -> Result(List(Project), Snag) {
+  case mode.includes_dev(mode) {
+    True -> all(project, manifest)
+    False -> production(project, manifest)
+  }
+}
+
+fn production(
   project: Project,
   manifest: Manifest,
 ) -> Result(List(Project), Snag) {
@@ -18,30 +164,26 @@ pub fn production(
     project.dependencies
     |> gleam_last(manifest)
     |> list.map(Visit)
-    |> dependencies_loop(set.new(), [], manifest, False),
+    |> dependencies_loop(set.new(), [], manifest),
   )
 
   Ok(list.reverse([project, ..dependencies]))
 }
 
-// Like dependency.production but also includes dev_dependencies, tagging
-// packages only reachable via dev deps with is_dev: True.
-// For local (path) dependencies, their dev_dependencies are also included
-// so they are available when the main package is compiled.
+// Like dependency.production but also includes the root project's
+// dev_dependencies, tagging packages only reachable via dev deps with
+// is_dev: True.
 pub fn all(
   project: Project,
   manifest: Manifest,
 ) -> Result(List(Project), Snag) {
-  // Compute prod-reachable names first.
   use prod_dependencies <- result.try(
     project.dependencies
     |> gleam_last(manifest)
     |> list.map(Visit)
-    |> dependencies_loop(set.new(), [], manifest, False),
+    |> dependencies_loop(set.new(), [], manifest),
   )
 
-  // Walk all deps including dev. For local deps, also traverse their
-  // dev_dependencies so they are compiled before the main package.
   let all_dependencies = case project {
     project.Gleam(dev_dependencies:, dependencies:, ..) ->
       list.append(dependencies, dev_dependencies)
@@ -52,10 +194,9 @@ pub fn all(
     all_dependencies
     |> gleam_last(manifest)
     |> list.map(Visit)
-    |> dependencies_loop(set.new(), [], manifest, True),
+    |> dependencies_loop(set.new(), [], manifest),
   )
 
-  // Tag packages not reachable from prod as dev-only.
   let prod_names =
     list.map(prod_dependencies, fn(p) { p.name })
     |> set.from_list
@@ -76,46 +217,24 @@ fn dependencies_loop(
   visited: Set(String),
   sorted: List(Project),
   manifest: Manifest,
-  include_local_dev: Bool,
 ) -> Result(List(Project), Snag) {
   case stack {
     [] -> Ok(sorted)
 
     [Emit(dependency), ..stack] ->
-      dependencies_loop(
-        stack,
-        visited,
-        [dependency, ..sorted],
-        manifest,
-        include_local_dev,
-      )
+      dependencies_loop(stack, visited, [dependency, ..sorted], manifest)
 
     [Visit(name), ..stack] -> {
       case set.contains(visited, name) {
-        True ->
-          dependencies_loop(stack, visited, sorted, manifest, include_local_dev)
+        True -> dependencies_loop(stack, visited, sorted, manifest)
         False -> {
           use dependency <- result.try(
             dict.get(manifest, name)
             |> snag.replace_error("Dependency not found in manifest: " <> name),
           )
 
-          let deps = case include_local_dev {
-            True ->
-              case dependency {
-                project.Gleam(
-                  is_local: True,
-                  dev_dependencies:,
-                  dependencies:,
-                  ..,
-                ) -> list.append(dependencies, dev_dependencies)
-                _ -> dependency.dependencies
-              }
-            False -> dependency.dependencies
-          }
-
           let stack =
-            deps
+            dependency.dependencies
             |> gleam_last(manifest)
             |> list.fold([Emit(dependency), ..stack], fn(stack, name) {
               case set.contains(visited, name) {
@@ -126,7 +245,7 @@ fn dependencies_loop(
 
           let visited = set.insert(visited, name)
 
-          dependencies_loop(stack, visited, sorted, manifest, include_local_dev)
+          dependencies_loop(stack, visited, sorted, manifest)
         }
       }
     }

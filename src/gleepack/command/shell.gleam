@@ -5,7 +5,9 @@ import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import gleepack/command/build
+import gleepack/command/run
 import gleepack/config
+import gleepack/mode
 import gleepack/project
 import gleepack/target
 import glint.{type Command}
@@ -45,8 +47,6 @@ Defaults to the highest available OTP version for the current platform.
   case project {
     project.Gleam(target: None, ..)
     | project.Gleam(target: Some(project.Erlang), ..) -> {
-      let module = project.module |> option.unwrap(project.name)
-
       use native_target <- result.try(case target(flags) {
         Error(_) ->
           case target.default(available) {
@@ -73,12 +73,14 @@ Defaults to the highest available OTP version for the current platform.
         }
       })
 
+      run.clean_leftover_executables(project.name)
+
       case
         temporary.create(
           temporary.file()
             |> temporary.in_directory(config.build_dir)
             |> temporary.with_prefix(project.name <> "-"),
-          run: build_and_shell(_, project, available, native_target, module),
+          run: build_and_shell(_, project, available, native_target),
         )
       {
         Ok(result) -> result
@@ -100,9 +102,9 @@ Defaults to the highest available OTP version for the current platform.
   }
 }
 
-fn build_and_shell(tmp_path, project, available, target, module) {
+fn build_and_shell(tmp_path, project, available, target) {
   use pairs <- result.try({
-    build.build(project, available, [#(target, tmp_path)], module)
+    build.build(project, available, [#(target, tmp_path)], mode.Shell)
   })
 
   let assert [#(_, tmp_path)] = pairs

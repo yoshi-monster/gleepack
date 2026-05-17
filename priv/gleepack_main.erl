@@ -1,6 +1,9 @@
 -module(gleepack_main).
+-behaviour(gen_event).
 
 -export([main/0, main/1]).
+-export([init/1, handle_event/2, handle_call/2, handle_info/2,
+         terminate/2, code_change/3]).
 
 -define(APP, '{{APPLICATION}}').
 -define(ENTRY, '{{MODULE}}').
@@ -14,6 +17,7 @@ main(_Args) ->
 run(Module) ->
     io:setopts(standard_io, [binary, {encoding, utf8}]),
     io:setopts(standard_error, [{encoding, utf8}]),
+    quiet_sigterm_handler(),
     process_flag(trap_exit, true),
     Pid = spawn_link(fun() -> run_module(Module) end),
     receive
@@ -24,6 +28,43 @@ run(Module) ->
             print_error(exit, Reason),
             stop(1)
     end.
+
+%% Swap OTP's default erl_signal_handler — which logs
+%% "SIGTERM received - shutting down" via error_logger — for a quiet
+%% replacement that still calls init:stop/0. sigusr1 and sigquit keep
+%% their stock halt behaviour.
+quiet_sigterm_handler() ->
+    try
+        gen_event:swap_handler(
+          erl_signal_server,
+          {erl_signal_handler, swap},
+          {?MODULE, []})
+    catch
+        _:_ -> ok
+    end,
+    ok.
+
+%% -- gen_event callbacks for the quiet sigterm handler ---------------------
+
+init({[], _PrevState}) -> {ok, []};
+init([]) -> {ok, []}.
+
+handle_event(sigterm, S) ->
+    ok = init:stop(),
+    {ok, S};
+handle_event(sigusr1, S) ->
+    erlang:halt("Received SIGUSR1"),
+    {ok, S};
+handle_event(sigquit, S) ->
+    erlang:halt(),
+    {ok, S};
+handle_event(_Other, S) ->
+    {ok, S}.
+
+handle_call(_Request, S) -> {ok, ok, S}.
+handle_info(_Info, S) -> {ok, S}.
+terminate(_Args, _S) -> ok.
+code_change(_OldVsn, S, _Extra) -> {ok, S}.
 
 run_module(Module) ->
     try

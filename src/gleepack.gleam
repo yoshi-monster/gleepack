@@ -6,9 +6,12 @@ import gleam/string
 import gleam_community/ansi
 import gleepack/command/build
 import gleepack/command/clean
+import gleepack/command/dev
+import gleepack/command/lustre_dev
 import gleepack/command/run
 import gleepack/command/shell
 import gleepack/command/targets
+import gleepack/command/test_command
 import gleepack/command/version
 import gleepack/config
 import glint
@@ -22,6 +25,9 @@ pub fn main() -> Nil {
     |> glint.pretty_help(glint.default_pretty_help())
     |> glint.add(at: ["build"], do: build.command())
     |> glint.add(at: ["run"], do: run.command())
+    |> glint.add(at: ["test"], do: test_command.command())
+    |> glint.add(at: ["dev"], do: dev.command())
+    |> glint.add(at: ["lustre/dev"], do: lustre_dev.command())
     |> glint.add(at: ["shell"], do: shell.command())
     |> glint.path_help(at: ["targets"], put: targets.group_help)
     |> glint.add(at: ["targets", "available"], do: targets.available())

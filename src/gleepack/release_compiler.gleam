@@ -16,6 +16,7 @@ import gleepack/app_file
 import gleepack/beam_compiler.{type BeamCompiler}
 import gleepack/config
 import gleepack/emu_args
+import gleepack/mode.{type Mode}
 import gleepack/project.{type Project, Gleam}
 import gleepack/project_compiler
 import gleepack/target.{type InstalledTarget}
@@ -141,8 +142,9 @@ fn collect_priv_files(dep: Project) -> Result(List(#(String, BitArray)), Snag) {
 
   list.try_fold(file_paths, [], fn(acc, src_path) {
     case filepath.extension(src_path) {
-      Ok("so") | Ok("dll") | Ok("dylib") | Ok("o") | Error(Nil) -> Ok(acc)
-      Ok(_) -> {
+      // Skip native artefacts that would be wrong across target platforms.
+      Ok("so") | Ok("dll") | Ok("dylib") | Ok("o") -> Ok(acc)
+      _ -> {
         use contents <- result.try(read_bits(src_path))
         let relative = string.remove_prefix(src_path, src_dir)
         Ok([#(filepath.join(dst_dir, relative), contents), ..acc])
@@ -184,11 +186,11 @@ pub fn collect_otp_apps(
 /// Assemble a release archive from already-compiled files.
 ///
 /// Discovers OTP app dependencies by reading compiled `.app` files, collects
-/// all dependency and OTP application files, adds the entrypoint beam and
-/// emulator args, and builds a zip archive in memory.
+/// all dependency and OTP application files, optionally adds the entrypoint
+/// beam, and builds a zip archive in memory.
 pub fn assemble(
   project project: Project,
-  entrypoint_beam entrypoint_beam: BitArray,
+  entrypoint_beam entrypoint_beam: option.Option(BitArray),
   dependencies dependencies: List(Project),
   otp_directory otp_directory: String,
 ) -> Result(BitArray, Snag) {
@@ -214,12 +216,15 @@ pub fn assemble(
     zip.new()
     |> zip.store_extensions([".beam"])
 
-  let builder =
-    zip.add(
-      builder,
-      at: "lib/" <> project.otp_app <> "/ebin/gleepack_main.beam",
-      containing: entrypoint_beam,
-    )
+  let builder = case entrypoint_beam {
+    option.Some(beam) ->
+      zip.add(
+        builder,
+        at: "lib/" <> project.otp_app <> "/ebin/gleepack_main.beam",
+        containing: beam,
+      )
+    option.None -> builder
+  }
 
   let builder =
     list.fold(dep_files, builder, fn(builder, file) {
@@ -245,11 +250,11 @@ pub fn assemble(
 
 // -- Full build pipeline -----------------------------------------------------
 
-/// Build a complete release archive: compile all dependencies, render and
-/// compile the entrypoint, then assemble into a zip.
+/// Build a complete release archive: compile all dependencies, optionally
+/// render and compile the entrypoint, then assemble into a zip.
 pub fn build(
   project project: Project,
-  module module: String,
+  mode mode: Mode,
   dependencies dependencies: List(Project),
   compile_dependencies compile_dependencies: List(Project),
   target target: InstalledTarget,
@@ -263,7 +268,7 @@ pub fn build(
   let result =
     do_build(
       project,
-      module,
+      mode,
       dependencies,
       compile_dependencies,
       target,
@@ -277,7 +282,7 @@ pub fn build(
 
 fn do_build(
   project: Project,
-  module: String,
+  mode: Mode,
   dependencies: List(Project),
   compile_dependencies: List(Project),
   target: InstalledTarget,
@@ -285,16 +290,21 @@ fn do_build(
 ) -> Result(BitArray, Snag) {
   // Compile all packages
   use Nil <- result.try(
-    project_compiler.compile(compile_dependencies, target, compiler)
+    project_compiler.compile(compile_dependencies, mode, target, compiler)
     |> snag.context("Compiling project"),
   )
 
-  // Render and compile entrypoint
-  use entrypoint_source <- result.try(render(project, module))
-  use entrypoint_beam <- result.try(
-    compile_entrypoint(entrypoint_source, project, compiler)
-    |> snag.context("Building entrypoint"),
-  )
+  use entrypoint_beam <- result.try(case mode.entrypoint(mode) {
+    Error(Nil) -> Ok(option.None)
+    Ok(module) -> {
+      use source <- result.try(render(project, module))
+      use beam <- result.try(
+        compile_entrypoint(source, project, compiler)
+        |> snag.context("Building entrypoint"),
+      )
+      Ok(option.Some(beam))
+    }
+  })
 
   assemble(
     project:,

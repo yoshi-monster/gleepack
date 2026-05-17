@@ -19,6 +19,7 @@ import gleam_community/ansi
 import gleepack/app_file
 import gleepack/beam_compiler.{type BeamCompiler}
 import gleepack/config
+import gleepack/mode.{type Mode}
 import gleepack/project.{type Project, Gleam, Mix, Rebar3}
 import gleepack/target.{type InstalledTarget}
 import simplifile
@@ -34,6 +35,7 @@ type LoopState {
   LoopState(
     target: InstalledTarget,
     compiler: BeamCompiler,
+    mode: Mode,
     // Maps package name -> otp_app for resolving .app dependencies.
     otp_apps: Dict(String, String),
     remaining: List(Project),
@@ -50,6 +52,7 @@ type LoopState {
 /// reused for later compilation steps (e.g. the release entrypoint).
 pub fn compile(
   dependencies: List(Project),
+  mode: Mode,
   target: InstalledTarget,
   compiler: BeamCompiler,
 ) -> Result(Nil, Snag) {
@@ -68,6 +71,7 @@ pub fn compile(
     LoopState(
       target:,
       compiler:,
+      mode:,
       otp_apps:,
       remaining: dependencies,
       in_flight: None,
@@ -93,7 +97,6 @@ fn loop(state: LoopState) -> Result(Nil, Snag) {
   case process.selector_receive(from: selector, within: 60_000) {
     Error(Nil) -> snag.error("Timed out waiting for compilation")
 
-    // we either inherit or null compiler io, so this message never happens
     Ok(CompileOutput(_)) -> loop(state)
 
     Ok(CompileFinished(0)) ->
@@ -194,19 +197,28 @@ fn on_compile_finished(
   project: Project,
 ) -> Result(LoopState, Snag) {
   case project {
-    Gleam(name:, dependencies:, extra_applications:, ..) -> {
+    Gleam(name:, dependencies:, dev_dependencies:, extra_applications:, ..) -> {
       let out = filepath.join(config.build_dir, name)
       let ebin = filepath.join(out, "ebin")
-      let artefacts = collect_artefacts(project, out)
+      let artefacts = collect_artefacts(project, state.mode, out)
       let modules =
         list.map(artefacts, fn(src) {
           filepath.strip_extension(filepath.base_name(src))
         })
+      // In modes that bundle dev deps, surface the entry project's
+      // dev_dependencies in its applications list so OTP starts them and
+      // `application:priv_dir/1` etc. work for tools like lustre_dev_tools.
+      let app_dependencies = case
+        mode.includes_dev(state.mode) && project.src == "."
+      {
+        True -> list.append(dependencies, dev_dependencies)
+        False -> dependencies
+      }
       let applications =
         list.flatten([
           ["kernel", "stdlib"],
           extra_applications,
-          list.map(dependencies, fn(dep) {
+          list.map(app_dependencies, fn(dep) {
             dict.get(state.otp_apps, dep) |> result.unwrap(dep)
           }),
         ])
@@ -233,8 +245,16 @@ fn on_compile_finished(
         |> snag.context("Sending files for " <> name <> " to the BEAM compiler"),
       )
 
-      let pending =
-        queue.push_back(state.pending, #(name, list.length(artefacts)))
+      // Packages with no .erl artefacts (interface-only / pure-FFI) never get
+      // a beam compiler response, so they'd stay in `pending` forever and
+      // block subsequent Rebar3/Mix spawns. Print directly instead.
+      let pending = case artefacts {
+        [] -> {
+          io.println(ansi.pink("   Compiled ") <> name)
+          state.pending
+        }
+        _ -> queue.push_back(state.pending, #(name, list.length(artefacts)))
+      }
       Ok(LoopState(..state, in_flight: None, pending:))
     }
 
@@ -245,20 +265,28 @@ fn on_compile_finished(
   }
 }
 
-fn collect_artefacts(project: Project, out: String) -> List(String) {
+fn collect_artefacts(
+  project: Project,
+  mode: Mode,
+  out: String,
+) -> List(String) {
+  // Test artefacts (.erl compiled from test/) are kept only for the main
+  // project (src = ".") when the mode bundles dev dependencies. Dependencies
+  // never contribute their test modules to the release.
+  let keep_tests = mode.includes_dev(mode) && project.src == "."
   let artefacts_dir = filepath.join(out, "_gleam_artefacts")
   case simplifile.get_files(artefacts_dir) {
     Error(_) -> []
-    Ok(files) -> list.filter(files, is_artefact(project.src, _))
+    Ok(files) -> list.filter(files, is_artefact(project.src, keep_tests, _))
   }
 }
 
-fn is_artefact(src, path) {
+fn is_artefact(src, keep_tests, path) {
   let base_name = filepath.base_name(path)
   case base_name, filepath.extension(base_name) {
     "gleam@@" <> _, Ok("erl") -> False
     _, Ok("erl") | _, Ok("ex") ->
-      !is_test_artefact(src, filepath.strip_extension(base_name))
+      keep_tests || !is_test_artefact(src, filepath.strip_extension(base_name))
     _, _ -> False
   }
 }
