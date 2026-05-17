@@ -7,6 +7,7 @@ import gleam_community/ansi
 import gleepack/command/build
 import gleepack/command/clean
 import gleepack/command/run
+import gleepack/command/shell
 import gleepack/command/targets
 import gleepack/command/version
 import gleepack/config
@@ -21,6 +22,7 @@ pub fn main() -> Nil {
     |> glint.pretty_help(glint.default_pretty_help())
     |> glint.add(at: ["build"], do: build.command())
     |> glint.add(at: ["run"], do: run.command())
+    |> glint.add(at: ["shell"], do: shell.command())
     |> glint.path_help(at: ["targets"], put: targets.group_help)
     |> glint.add(at: ["targets", "available"], do: targets.available())
     |> glint.add(at: ["targets", "installed"], do: targets.installed())

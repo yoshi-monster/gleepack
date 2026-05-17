@@ -16,21 +16,9 @@ import temporary
 pub fn command() -> Command(Result(Nil, Snag)) {
   use <- glint.command_help(
     "
-Build your Gleam project and run it directly using the native toolchain,
-without producing a distributable executable. Always targets the current
-platform.
+Build your Gleam project and open an interactive Erlang shell with all
+application code loaded. Always targets the current platform.
   ",
-  )
-
-  use module <- glint.flag(
-    glint.string_flag("module")
-    |> glint.flag_help("
-Configure which module's main function will be called: By default this is a
-module called $project_name, matching the one `gleam run` would run by default.
-
-This option can also be provided in your `gleam.toml` configuration under the
-key `tools." <> config.app_name <> ".module`.
-      "),
   )
 
   use target <- glint.flag(
@@ -43,7 +31,7 @@ Defaults to the highest available OTP version for the current platform.
     ),
   )
 
-  use _, args, flags <- glint.command
+  use _, _, flags <- glint.command
 
   use available <- result.try(
     target.available() |> snag.context("Loading available targets"),
@@ -57,11 +45,9 @@ Defaults to the highest available OTP version for the current platform.
   case project {
     project.Gleam(target: None, ..)
     | project.Gleam(target: Some(project.Erlang), ..) -> {
-      let module =
-        module(flags)
-        |> result.unwrap(project.module |> option.unwrap(project.name))
+      let module = project.module |> option.unwrap(project.name)
 
-      use target <- result.try(case target(flags) {
+      use native_target <- result.try(case target(flags) {
         Error(_) ->
           case target.default(available) {
             Ok(t) -> Ok(t)
@@ -71,12 +57,12 @@ Defaults to the highest available OTP version for the current platform.
               )
           }
         Ok(slug) -> {
-          use target <- result.try(
+          use t <- result.try(
             target.from_string(available, slug)
             |> snag.replace_error("Invalid target " <> string.inspect(slug)),
           )
-          case target.supported(target) {
-            True -> Ok(target)
+          case target.supported(t) {
+            True -> Ok(t)
             False ->
               snag.error(
                 "Target "
@@ -92,7 +78,7 @@ Defaults to the highest available OTP version for the current platform.
           temporary.file()
             |> temporary.in_directory(config.build_dir)
             |> temporary.with_prefix(project.name <> "-"),
-          run: build_and_run(_, project, available, target, module, args),
+          run: build_and_shell(_, project, available, native_target, module),
         )
       {
         Ok(result) -> result
@@ -114,7 +100,7 @@ Defaults to the highest available OTP version for the current platform.
   }
 }
 
-fn build_and_run(tmp_path, project, available, target, module, args) {
+fn build_and_shell(tmp_path, project, available, target, module) {
   use pairs <- result.try({
     build.build(project, available, [#(target, tmp_path)], module)
   })
@@ -123,7 +109,13 @@ fn build_and_run(tmp_path, project, available, target, module, args) {
 
   case
     child_process.from_file(tmp_path)
-    |> child_process.args(args)
+    |> child_process.env("GLEEPACK_RAW_ARGS", "1")
+    |> child_process.arg("--")
+    |> child_process.arg2("-root", "/__gleepack__")
+    |> child_process.arg2("-bindir", "/__gleepack__/bin")
+    |> child_process.arg2("-boot", "/__gleepack__/start")
+    |> child_process.arg2("-start_epmd", "false")
+    |> child_process.arg2("-dist_listen", "false")
     |> child_process.run(stdio.inherit())
   {
     Ok(child_process.Output(status_code: 0, output: _)) -> Ok(Nil)
@@ -133,5 +125,5 @@ fn build_and_run(tmp_path, project, available, target, module, args) {
       )
     Error(error) -> snag.error(child_process.describe_start_error(error))
   }
-  |> snag.context("Running " <> tmp_path)
+  |> snag.context("Running Erlang shell")
 }
