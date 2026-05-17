@@ -1,0 +1,45 @@
+name: Rebuild all OTP releases
+
+# Re-trigger build.yml for every existing OTP-* release. Useful after a
+# runtime patch lands and every published OTP version needs its binaries
+# refreshed.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  fan-out:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Dispatch build.yml for each OTP-* release
+        run: |
+          set -euo pipefail
+
+          versions=$(gh release list \
+            --repo "${{ github.repository }}" \
+            --limit 1000 \
+            --json tagName \
+            --jq '.[].tagName | select(startswith("OTP-")) | sub("^OTP-"; "")')
+
+          if [ -z "$versions" ]; then
+            echo "No OTP-* releases found."
+            exit 0
+          fi
+
+          echo "Re-triggering build.yml for:"
+          echo "$versions" | sed 's/^/  - /'
+
+          while IFS= read -r v; do
+            [ -z "$v" ] && continue
+            echo "::group::Dispatch build.yml for OTP $v"
+            gh workflow run build.yml \
+              --repo "${{ github.repository }}" \
+              --ref "${{ github.ref }}" \
+              -f otp_version="$v"
+            echo "::endgroup::"
+          done <<< "$versions"
