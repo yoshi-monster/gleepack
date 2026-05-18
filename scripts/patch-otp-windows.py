@@ -4,13 +4,14 @@
 Must be run from the OTP source root (e.g. /mnt/c/otp-src).
 
 Patches applied:
-  1. erts/emulator/Makefile.in           - beam DLL → static exe, MSVCRT → LIBCMT,
-                                           /OPT:REF /OPT:ICF for dead-code elimination
+  1. erts/emulator/Makefile.in           - beam DLL → static exe, MSVCRT → LIBCMT
   2. lib/crypto/c_src/crypto_callback.c  - DLLEXPORT stripped for static NIF builds
   3. lib/public_key/c_src/Makefile       - adds static_lib target for pubkey_os_cacerts
-  4. erts/etc/win32/wsl_tools/vc/cc.sh  - /Gy injected into CMD so cl.exe gets it at
-                                           compile time (not routed to linker)
-  5. erts/emulator/sys/win32/beam.rc     - strip ICON resources (unused in headless runtime)
+  4. erts/etc/win32/wsl_tools/vc/cc.sh  - /Gy injected so cl.exe gets it at compile time
+  5. erts/etc/win32/wsl_tools/vc/ld.sh  - /OPT:REF /OPT:ICF added to link command for
+                                           dead-code elimination (cannot pass via Makefile:
+                                           ld.sh's /* catch converts /flags to UNC paths)
+  6. erts/emulator/sys/win32/beam.rc     - strip ICON resources (unused in headless runtime)
 """
 
 import pathlib
@@ -22,6 +23,8 @@ import pathlib
 #   a. Change FLAVOR_EXECUTABLE / PRIMARY_EXECUTABLE targets from .dll → .exe
 #   b. Replace the DLL link rule (-dll -def: -implib:) with a plain exe link
 #   c. Use LIBCMT (static CRT) instead of MSVCRT (dynamic CRT)
+# /OPT:REF /OPT:ICF are NOT added here — ld.sh's /*) catch converts any /flag
+# to a UNC path; those flags are injected into ld.sh's CMD directly (step 5).
 p = pathlib.Path("erts/emulator/Makefile.in")
 mk = p.read_text()
 
@@ -35,7 +38,7 @@ old_rule = (
     "\t$(STATIC_DRIVER_LIBS) $(LIBS)"
 )
 new_rule = (
-    "$(ld_verbose) $(LD) -lLIBCMT /OPT:REF /OPT:ICF -o $@ \\\n"
+    "$(ld_verbose) $(LD) -lLIBCMT -o $@ \\\n"
     "\t$(LDFLAGS) $(DEXPORT) $(INIT_OBJS) $(OBJS) $(STATIC_NIF_LIBS) \\\n"
     "\t$(STATIC_DRIVER_LIBS) $(LIBS)"
 )
@@ -119,7 +122,23 @@ assert old_cmd_init in cc_src, "CMD initialisation not found in cc.sh — check 
 cc.write_text(cc_src.replace(old_cmd_init, new_cmd_init, 1))
 print("wsl_tools/vc/cc.sh patched: /Gy added to default CMD")
 
-# 5. Strip ICON resources from erts/emulator/sys/win32/beam.rc.
+# 5. Patch wsl_tools/vc/ld.sh to add /OPT:REF /OPT:ICF to every link.
+#
+# ld.sh's argument parser has a /*) catch that runs any /flag through w32_path.sh,
+# converting it to a UNC path (\\wsl.localhost\...\OPT:REF) that link.exe then
+# tries to open as an object file, giving LNK1181. Flags passed via the Makefile
+# link rule therefore cannot start with /. The safe workaround is to inject the
+# flags directly into ld.sh's hardcoded CMD assembly, after the existing
+# -incremental:no (which is already hardcoded the same way).
+ld = pathlib.Path("erts/etc/win32/wsl_tools/vc/ld.sh")
+ld_src = ld.read_text()
+old_ld_cmd = 'CMD="$linktype -nologo -incremental:no $CMD $STDLIB $DEFAULT_LIBRARIES"'
+new_ld_cmd = 'CMD="$linktype -nologo -incremental:no /OPT:REF /OPT:ICF $CMD $STDLIB $DEFAULT_LIBRARIES"'
+assert old_ld_cmd in ld_src, "CMD line not found in ld.sh — check OTP version"
+ld.write_text(ld_src.replace(old_ld_cmd, new_ld_cmd, 1))
+print("wsl_tools/vc/ld.sh patched: /OPT:REF /OPT:ICF added to link command")
+
+# 6. Strip ICON resources from erts/emulator/sys/win32/beam.rc.
 #
 # OTP embeds the Erlang logo as multi-resolution ICON resources (~100 KB).
 # gleepack runs headless and never shows a window, so the icon is dead weight.
