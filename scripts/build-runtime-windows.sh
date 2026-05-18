@@ -119,6 +119,12 @@ export CXXFLAGS="/Gy /O2"
 # Explicit NIF list: asn1rt_nif.a, crypto.a, pubkey_os_cacerts.a.
 # These are pre-built by the static_lib steps below before the emulator links.
 # asn1rt_nif.a is a copy of the .lib (see comment near that cp command).
+# The OTP tarball ships pre-built configure caches in make/autoconf/*.config.cache.static;
+# otp_build copies them to erts/local.static.config.cache before calling configure.
+# If CFLAGS differ from what was in the cache when it was generated, configure aborts.
+# Delete them all so configure probes from scratch.
+find . -name "*.config.cache*" -delete
+
 ./otp_build configure \
     --enable-jit \
     --with-ssl="$SSL_PREFIX" \
