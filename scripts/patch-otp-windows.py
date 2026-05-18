@@ -4,11 +4,13 @@
 Must be run from the OTP source root (e.g. /mnt/c/otp-src).
 
 Patches applied:
-  1. erts/emulator/Makefile.in  - beam DLL → static exe, MSVCRT → LIBCMT,
-                                  /OPT:REF /OPT:ICF for dead-code elimination
-  2. lib/crypto/c_src/crypto_callback.c - DLLEXPORT stripped for static NIF builds
-  3. lib/public_key/c_src/Makefile - adds static_lib target for pubkey_os_cacerts
-  4. erts/emulator/sys/win32/beam.rc - strip ICON resources (unused in headless runtime)
+  1. erts/emulator/Makefile.in           - beam DLL → static exe, MSVCRT → LIBCMT,
+                                           /OPT:REF /OPT:ICF for dead-code elimination
+  2. lib/crypto/c_src/crypto_callback.c  - DLLEXPORT stripped for static NIF builds
+  3. lib/public_key/c_src/Makefile       - adds static_lib target for pubkey_os_cacerts
+  4. erts/etc/win32/wsl_tools/vc/cc.sh  - /Gy injected into CMD so cl.exe gets it at
+                                           compile time (not routed to linker)
+  5. erts/emulator/sys/win32/beam.rc     - strip ICON resources (unused in headless runtime)
 """
 
 import pathlib
@@ -101,7 +103,23 @@ assert "static_lib" not in pk_mk, "public_key Makefile already has static_lib ta
 pk.write_text(pk_mk + static_lib_rule)
 print("public_key/c_src/Makefile patched: added static_lib target")
 
-# 4. Strip ICON resources from erts/emulator/sys/win32/beam.rc.
+# 4. Patch wsl_tools/vc/cc.sh to route /Gy to the compiler (CMD), not the linker.
+#
+# cc.sh translates GCC-style flags to MSVC but only knows specific patterns.
+# Unknown flags (including /Gy) fall to the catch-all which appends them to
+# LINKCMD. When configure tests "can the compiler create executables" with
+# CFLAGS containing /Gy, the flag lands on the link command instead of the
+# compile command, which causes link.exe to reject it and configure to fail.
+# Adding an explicit case puts /Gy in CMD so cl.exe sees it at compile time.
+cc = pathlib.Path("erts/etc/win32/wsl_tools/vc/cc.sh")
+cc_src = cc.read_text()
+old_cmd_init = 'CMD=""'
+new_cmd_init = 'CMD="/Gy"   # gleepack: function-level COMDAT for /OPT:REF dead-strip'
+assert old_cmd_init in cc_src, "CMD initialisation not found in cc.sh — check OTP version"
+cc.write_text(cc_src.replace(old_cmd_init, new_cmd_init, 1))
+print("wsl_tools/vc/cc.sh patched: /Gy added to default CMD")
+
+# 5. Strip ICON resources from erts/emulator/sys/win32/beam.rc.
 #
 # OTP embeds the Erlang logo as multi-resolution ICON resources (~100 KB).
 # gleepack runs headless and never shows a window, so the icon is dead weight.

@@ -110,11 +110,10 @@ fi
 # - ole32.lib: CoTaskMemFree / SHGetKnownFolderPath used by gleepack_entry.c
 export LIBS="${STATIC_LIB_DIR}/libcrypto_static.lib ${STATIC_LIB_DIR}/libssl_static.lib bcrypt.lib crypt32.lib ws2_32.lib ole32.lib"
 
-# /Gy: function-level linking (COMDAT per function) so /OPT:REF in the linker
-# can eliminate unreferenced functions — equivalent to -ffunction-sections/--gc-sections.
-# /Os: optimize for size instead of the default /O2 (speed).
-export CFLAGS="/Gy /O2"
-export CXXFLAGS="/Gy /O2"
+# /Gy (function-level COMDAT) is injected via the cc.sh patch in patch-otp-windows.py
+# so it reaches cl.exe at compile time without going through configure's CFLAGS check
+# (cc.sh routes unknown /flags to the linker, which breaks the configure compiler test).
+# OTP's opt build already sets /O2 via its own TYPE_FLAGS.
 
 # Explicit NIF list: asn1rt_nif.a, crypto.a, pubkey_os_cacerts.a.
 # These are pre-built by the static_lib steps below before the emulator links.
