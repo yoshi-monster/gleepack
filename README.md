@@ -177,10 +177,10 @@ with direct `posix_spawn` calls.
 
 One small behavioural difference falls out of this: stock OTP calls
 `setsid()` in spawned children, putting each one in its own session detached
-from the controlling terminal. Gleepack does not. Children stay in the
+from the controlling terminal, gleepack does not. Children stay in the
 parent's process group, so terminal signals (Ctrl-C, SIGHUP on disconnect)
 reach them too. This means a long-running subprocess dies with the parent
-instead of being orphaned — the behaviour you'd want from a CLI tool, but a
+instead of being orphaned - the behaviour you'd want from a CLI tool, but a
 divergence from what an Erlang application linked against stock OTP would
 see.
 

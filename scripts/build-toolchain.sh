@@ -4,7 +4,7 @@
 #
 # Required env: OTP_VERSION, REBAR3_VERSION
 # Optional env: ELIXIR_VERSION (default: 1.18.3)
-# Output: /tmp/toolchain/ — zip this as otp-$OTP_VERSION.zip
+# Output: /tmp/toolchain/ - zip this as otp-$OTP_VERSION.zip
 
 set -xe
 

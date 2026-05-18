@@ -2,7 +2,7 @@
 # Build the gleepack runtime (dead-stripped beam.smp) for macOS.
 #
 # Required env: OTP_VERSION
-# Output: /tmp/gleepack — stripped beam.smp ready to package
+# Output: /tmp/gleepack - stripped beam.smp ready to package
 
 set -xe
 

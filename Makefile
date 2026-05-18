@@ -24,7 +24,7 @@ else
 endif
 RUNTIME_SLUG := $(HOST_ARCH)-$(HOST_OS)-otp-$(OTP_VERSION)
 
-# Sentinel files — written once after checkout, stable across configure/build runs.
+# Sentinel files - written once after checkout, stable across configure/build runs.
 # Using the source directory as a dependency causes spurious rebuilds because
 # ./configure writes files (Makefile, config.h, etc.) directly into the source
 # root, updating its mtime and making downstream sentinels appear stale.
@@ -48,7 +48,7 @@ ELIXIR_CLONED  := $(BUILD_ROOT)/elixir-cloned
 OTP_BIN := $(CURDIR)/$(OTP_SRC)/bin
 
 # Single assembled toolchain directory: OTP apps + rebar3 apps + Elixir apps.
-# install rsyncs this one directory — no separate install steps.
+# install rsyncs this one directory - no separate install steps.
 TOOLCHAIN_DIR       := $(BUILD_ROOT)/toolchain
 TOOLCHAIN_ASSEMBLED := $(BUILD_ROOT)/toolchain-assembled
 
@@ -179,17 +179,17 @@ $(BUILD_ROOT)/elixir-built: $(ELIXIR_CLONED) $(OTP_BUILT)
 # --- Assemble single toolchain release ---
 #
 # Produces build/toolchain/lib/ containing:
-#   OTP apps       — beam/app/boot/script only, versioned dirs from source tree
-#   rebar3 apps    — beam/app/priv from _build/prod/lib/, versioned from .app
-#   Elixir apps    — beam/app + lib/*.ex (like official distribution), versioned
+#   OTP apps       - beam/app/boot/script only, versioned dirs from source tree
+#   rebar3 apps    - beam/app/priv from _build/prod/lib/, versioned from .app
+#   Elixir apps    - beam/app + lib/*.ex (like official distribution), versioned
 #
 # All BEAM files are stripped of debug info. This single directory is what
-# gets rsync'd by `make install` — no separate install steps.
+# gets rsync'd by `make install` - no separate install steps.
 assemble: $(TOOLCHAIN_ASSEMBLED)
 $(TOOLCHAIN_ASSEMBLED): $(OTP_BUILT) $(REBAR3_BIN) $(BUILD_ROOT)/elixir-built
 	rm -rf $(TOOLCHAIN_DIR)
 	mkdir -p $(TOOLCHAIN_DIR)/lib $(TOOLCHAIN_DIR)/bin
-	@# OTP apps: only beam/app/boot/script — no src, docs, examples, native drivers
+	@# OTP apps: only beam/app/boot/script - no src, docs, examples, native drivers
 	rsync -a \
 	  --include='*/' \
 	  --include='*.beam' \
@@ -199,9 +199,9 @@ $(TOOLCHAIN_ASSEMBLED): $(OTP_BUILT) $(REBAR3_BIN) $(BUILD_ROOT)/elixir-built
 	  --include="*.hrl" \
 	  --exclude='*' \
 	  $(OTP_SRC)/lib/ $(TOOLCHAIN_DIR)/lib/
-	@# start_clean.boot — needed to boot the VM without any specific application
+	@# start_clean.boot - needed to boot the VM without any specific application
 	cp $(OTP_SRC)/bin/no_dot_erlang.boot $(TOOLCHAIN_DIR)/start.boot
-	@# rebar3 apps from _build/prod/lib/ — beam/app/priv only
+	@# rebar3 apps from _build/prod/lib/ - beam/app/priv only
 	@for app_dir in $(REBAR3_SRC)/_build/prod/lib/*; do \
 	  app_name=$$(basename $$app_dir); \
 	  app_file=$$app_dir/ebin/$$app_name.app; \
@@ -211,7 +211,7 @@ $(TOOLCHAIN_ASSEMBLED): $(OTP_BUILT) $(REBAR3_BIN) $(BUILD_ROOT)/elixir-built
 	  cp $$app_dir/ebin/*.beam $$app_dir/ebin/*.app $$dest/ebin/ 2>/dev/null || true; \
 	  [ -d $$app_dir/priv ] && cp -r $$app_dir/priv $$dest/ || true; \
 	done
-	@# Elixir apps from lib/ — beam/app + ex source (like official distribution)
+	@# Elixir apps from lib/ - beam/app + ex source (like official distribution)
 	@for app_dir in $(ELIXIR_SRC)/lib/*; do \
 	  app_name=$$(basename $$app_dir); \
 	  [ -d $$app_dir/ebin ] || continue; \
@@ -229,7 +229,7 @@ $(TOOLCHAIN_ASSEMBLED): $(OTP_BUILT) $(REBAR3_BIN) $(BUILD_ROOT)/elixir-built
 	@echo "Toolchain assembled -> $(TOOLCHAIN_DIR)"
 
 # Install the gleepack binary and the assembled toolchain into the cache.
-# Installation is a single rsync — no separate OTP / rebar3 / Elixir steps.
+# Installation is a single rsync - no separate OTP / rebar3 / Elixir steps.
 install:
 	@CACHE="$$HOME/Library/Application Support/gleepack"; \
 	 RUNTIME_DIR="$$CACHE/runtime/$(RUNTIME_SLUG)"; \

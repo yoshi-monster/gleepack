@@ -5,7 +5,7 @@
 #
 # Usage: build-runtime-windows.sh <repo-path-in-wsl>
 # Required env: OTP_VERSION
-# Output: /mnt/c/gleepack/gleepack.exe — single static Windows executable
+# Output: /mnt/c/gleepack/gleepack.exe - single static Windows executable
 
 set -xe
 
@@ -14,7 +14,7 @@ OTP_ARCH="${OTP_ARCH:-x64}"   # x64 or arm64, passed from workflow matrix
 REPO="${1:?repo path required}"
 JOBS=$(($(nproc) + 2))
 
-# OTP source must live on the Windows filesystem — otp_build requires it
+# OTP source must live on the Windows filesystem - otp_build requires it
 OTP_SRC=/mnt/c/otp-src
 OUT_DIR=/mnt/c/gleepack
 # vcpkg triplet matches the otp_build arch name
@@ -110,6 +110,12 @@ fi
 # - ole32.lib: CoTaskMemFree / SHGetKnownFolderPath used by gleepack_entry.c
 export LIBS="${STATIC_LIB_DIR}/libcrypto_static.lib ${STATIC_LIB_DIR}/libssl_static.lib bcrypt.lib crypt32.lib ws2_32.lib ole32.lib"
 
+# /Gy: function-level linking (COMDAT per function) so /OPT:REF in the linker
+# can eliminate unreferenced functions — equivalent to -ffunction-sections/--gc-sections.
+# /Os: optimize for size instead of the default /O2 (speed).
+export CFLAGS="/Gy /O2"
+export CXXFLAGS="/Gy /O2"
+
 # Explicit NIF list: asn1rt_nif.a, crypto.a, pubkey_os_cacerts.a.
 # These are pre-built by the static_lib steps below before the emulator links.
 # asn1rt_nif.a is a copy of the .lib (see comment near that cp command).
@@ -158,13 +164,13 @@ cp lib/asn1/priv/lib/win32/asn1rt_nif.lib lib/asn1/priv/lib/win32/asn1rt_nif.a
 # pre-build step above and linked statically via STATIC_NIF_LIBS. The two-pass
 # Unix dance (build emulator → build crypto.so → relink) is not needed here:
 # the DLL build would fail anyway because libcrypto_static.lib pulls in
-# BCryptGenRandom which is only in bcrypt.lib — a dep we carry in the emulator
+# BCryptGenRandom which is only in bcrypt.lib - a dep we carry in the emulator
 # LIBS, not in the DLL link command.
 make -j"$JOBS" -C erts/emulator opt
 
 # --- Copy result ---
 # gleepack_entry.c replaces erl_main.c, which compiles into the beam exe.
-# After our Makefile.in patch, the output is beam.smp.exe — a single static binary.
+# After our Makefile.in patch, the output is beam.smp.exe - a single static binary.
 BEAM=$(find bin -name "beam.smp.exe" -type f | head -1)
 cp "$BEAM" "$OUT_DIR/gleepack.exe"
 

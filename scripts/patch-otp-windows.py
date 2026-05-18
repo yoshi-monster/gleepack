@@ -4,9 +4,11 @@
 Must be run from the OTP source root (e.g. /mnt/c/otp-src).
 
 Patches applied:
-  1. erts/emulator/Makefile.in  — beam DLL → static exe, MSVCRT → LIBCMT
-  2. lib/crypto/c_src/crypto_callback.c — DLLEXPORT stripped for static NIF builds
-  3. lib/public_key/c_src/Makefile — adds static_lib target for pubkey_os_cacerts
+  1. erts/emulator/Makefile.in  - beam DLL → static exe, MSVCRT → LIBCMT,
+                                  /OPT:REF /OPT:ICF for dead-code elimination
+  2. lib/crypto/c_src/crypto_callback.c - DLLEXPORT stripped for static NIF builds
+  3. lib/public_key/c_src/Makefile - adds static_lib target for pubkey_os_cacerts
+  4. erts/emulator/sys/win32/beam.rc - strip ICON resources (unused in headless runtime)
 """
 
 import pathlib
@@ -21,8 +23,8 @@ import pathlib
 p = pathlib.Path("erts/emulator/Makefile.in")
 mk = p.read_text()
 
-mk = mk.replace("beam$(TF_MARKER).dll",       "beam$(TF_MARKER).exe")
-mk = mk.replace("beam$(TYPEMARKER).smp.dll",   "beam$(TYPEMARKER).smp.exe")
+mk = mk.replace("beam$(TF_MARKER).dll", "beam$(TF_MARKER).exe")
+mk = mk.replace("beam$(TYPEMARKER).smp.dll", "beam$(TYPEMARKER).smp.exe")
 
 old_rule = (
     "$(ld_verbose) $(LD) -dll -def:sys/$(ERLANG_OSTYPE)/erl.def \\\n"
@@ -31,11 +33,11 @@ old_rule = (
     "\t$(STATIC_DRIVER_LIBS) $(LIBS)"
 )
 new_rule = (
-    "$(ld_verbose) $(LD) -lLIBCMT -o $@ \\\n"
+    "$(ld_verbose) $(LD) -lLIBCMT /OPT:REF /OPT:ICF -o $@ \\\n"
     "\t$(LDFLAGS) $(DEXPORT) $(INIT_OBJS) $(OBJS) $(STATIC_NIF_LIBS) \\\n"
     "\t$(STATIC_DRIVER_LIBS) $(LIBS)"
 )
-assert old_rule in mk, "DLL link rule not found in Makefile.in — check OTP version"
+assert old_rule in mk, "DLL link rule not found in Makefile.in - check OTP version"
 mk = mk.replace(old_rule, new_rule)
 
 p.write_text(mk)
@@ -58,7 +60,9 @@ new_dllexport = (
     "#    define DLLEXPORT __declspec(dllexport)\n"
     "#  endif\n"
 )
-assert old_dllexport in src, "DLLEXPORT block not found in crypto_callback.c — check OTP version"
+assert old_dllexport in src, (
+    "DLLEXPORT block not found in crypto_callback.c - check OTP version"
+)
 cb.write_text(src.replace(old_dllexport, new_dllexport))
 print("crypto_callback.c patched: DLLEXPORT → empty for STATIC_ERLANG_NIF builds")
 
@@ -96,3 +100,16 @@ $(LIBDIR)/pubkey_os_cacerts.a: $(OBJDIR)/public_key_static.o
 assert "static_lib" not in pk_mk, "public_key Makefile already has static_lib target"
 pk.write_text(pk_mk + static_lib_rule)
 print("public_key/c_src/Makefile patched: added static_lib target")
+
+# 4. Strip ICON resources from erts/emulator/sys/win32/beam.rc.
+#
+# OTP embeds the Erlang logo as multi-resolution ICON resources (~100 KB).
+# gleepack runs headless and never shows a window, so the icon is dead weight.
+# Remove all ICON resource lines; keep VERSION, MANIFEST, and everything else.
+import re
+rc_path = pathlib.Path("erts/emulator/sys/win32/beam.rc")
+if rc_path.exists():
+    rc = rc_path.read_text()
+    patched = re.sub(r'^\s*\S+\s+ICON\b.*$\n?', '', rc, flags=re.MULTILINE | re.IGNORECASE)
+    rc_path.write_text(patched)
+    print("beam.rc patched: ICON resources removed")

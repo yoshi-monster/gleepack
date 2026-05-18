@@ -3,7 +3,7 @@
 # for Alpine Linux (musl libc).
 #
 # Required env: OTP_VERSION
-# Output: /tmp/gleepack — stripped beam.smp ready to package
+# Output: /tmp/gleepack - stripped beam.smp ready to package
 
 set -xe
 
@@ -34,17 +34,30 @@ cp otp/gleepack_vfs.h          "$OTP_SRC/erts/emulator/sys/unix/gleepack_vfs.h"
 cp otp/sys_drivers.c           "$OTP_SRC/erts/emulator/sys/unix/sys_drivers.c"
 cp otp/inet_gethost_native.erl "$OTP_SRC/lib/kernel/src/inet_gethost_native.erl"
 
+# Remove EMU_LDFLAGS from the emulator link line before configure runs.
+# On x86-64 Linux, OTP's configure sets EMU_LDFLAGS to -Wl,-z,max-page-size=2097152
+# for Transparent Huge Page support, forcing 2MB ELF segment alignment and adding
+# ~2MB of zero-padding to the binary. EMU_LDFLAGS comes after our LDFLAGS in the
+# link command so it can't be overridden via configure; patching Makefile.in before
+# configure runs is the only reliable way (patching the generated Makefile doesn't
+# stick because make regenerates it via config.status).
+# EMU_LDFLAGS only ever contains THP flags; it's empty on non-x86-64 platforms.
+sed -i 's/ \$(EMU_LDFLAGS)//' "$OTP_SRC/erts/emulator/Makefile.in"
+
 # --- Configure ---
 # Static libcrypto, dead code elimination via --gc-sections.
 # Full static link: -static pulls in musl libc statically.
+# -ffunction-sections -fdata-sections: put each symbol in its own ELF section
+# so --gc-sections can eliminate unreferenced ones (equivalent to -dead_strip on macOS).
+# -O2: optimize for speed; --gc-sections handles binary size.
 cd "$OTP_SRC"
 ERL_TOP="$OTP_SRC" \
 ./configure \
     CC=clang \
     CXX=clang \
     LIBS="-lncursesw -lssl -lcrypto -ltinfo -lstdc++" \
-    CFLAGS="-Os" \
-    LDFLAGS="-static -static-libgcc -static-libstdc++" \
+    CFLAGS="-O2 -ffunction-sections -fdata-sections" \
+    LDFLAGS="-static -static-libgcc -static-libstdc++ -Wl,--gc-sections" \
     --enable-jit \
     --with-termcap \
     --without-javac \
@@ -62,11 +75,16 @@ ERL_TOP="$OTP_SRC" \
     --without-docs \
     --disable-pie
 
-# Pass 1: build emulator so enif_* exports exist for crypto_callback build
-ERL_TOP="$OTP_SRC" make -j"$JOBS" -C "$OTP_SRC/erts/emulator" TYPE=opt
+# Pre-build crypto.a before the emulator passes.
+# The emulator Makefile has a multi-target rule for static NIFs that, with -jN,
+# spawns concurrent `make static_lib` jobs that race on crypto.a (file truncation).
+# Building the archive first means make finds it already present and skips the rule.
+# This works before the emulator exists: compiling the archive only needs erl_nif.h
+# (a header), not the emulator binary's enif link-time exports.
+ERL_TOP="$OTP_SRC" make -j"$JOBS" -C "$OTP_SRC/lib/crypto/c_src" TYPE=opt static_lib
 
-# Build crypto NIF against the emulator's exports
-ERL_TOP="$OTP_SRC" make -j"$JOBS" -C "$OTP_SRC/lib/crypto/c_src" TYPE=opt
+# Pass 1: build emulator objects (crypto.a already exists, no race)
+ERL_TOP="$OTP_SRC" make -j"$JOBS" -C "$OTP_SRC/erts/emulator" TYPE=opt
 
 # Pass 2: remove beam.smp to force a relink that pulls in crypto.a + libcrypto.a
 find "$OTP_SRC/bin" \( -name "beam.smp" -o -name "beam.jit" \) -delete
