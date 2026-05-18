@@ -108,7 +108,7 @@ fi
 # - bcrypt.lib crypt32.lib ws2_32.lib: required by LibreSSL static libs
 # - libcrypto_static.lib libssl_static.lib: OpenSSL symbols needed by crypto.a
 # - ole32.lib: CoTaskMemFree / SHGetKnownFolderPath used by gleepack_entry.c
-export LIBS="${STATIC_LIB_DIR}/libcrypto_static.lib ${STATIC_LIB_DIR}/libssl_static.lib bcrypt.lib crypt32.lib ws2_32.lib ole32.lib"
+export LIBS="${STATIC_LIB_DIR}/libcrypto_static.lib ${STATIC_LIB_DIR}/libssl_static.lib bcrypt.lib crypt32.lib ws2_32.lib ole32.lib iphlpapi.lib"
 
 # /Gy (function-level COMDAT) is injected via the cc.sh patch in patch-otp-windows.py
 # so it reaches cl.exe at compile time without going through configure's CFLAGS check
