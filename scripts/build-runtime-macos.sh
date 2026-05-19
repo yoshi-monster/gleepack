@@ -56,14 +56,10 @@ LDFLAGS="-Wl,-dead_strip" \
     --without-et \
     --disable-parallel-configure
 
-# Pass 1: build emulator so enif_* exports exist for crypto_callback build
-ERL_TOP="$OTP_SRC" make -j"$JOBS" -C "$OTP_SRC/erts/emulator" TYPE=opt
+# Pre-build crypto.a — only needs erl_nif.h, not the emulator binary.
+ERL_TOP="$OTP_SRC" make -j"$JOBS" -C "$OTP_SRC/lib/crypto/c_src" TYPE=opt static_lib
 
-# Build crypto NIF against the emulator's exports
-ERL_TOP="$OTP_SRC" make -j"$JOBS" -C "$OTP_SRC/lib/crypto/c_src" TYPE=opt
-
-# Pass 2: remove beam.smp to force a relink that pulls in crypto.a + libcrypto.a
-find "$OTP_SRC/bin" \( -name "beam.smp" -o -name "beam.jit" \) -delete
+# Build emulator — crypto.a is already present so it links in statically.
 ERL_TOP="$OTP_SRC" make -j"$JOBS" -C "$OTP_SRC/erts/emulator" TYPE=opt
 
 # Copy and strip

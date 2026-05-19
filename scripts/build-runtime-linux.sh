@@ -83,11 +83,7 @@ ERL_TOP="$OTP_SRC" \
 # (a header), not the emulator binary's enif link-time exports.
 ERL_TOP="$OTP_SRC" make -j"$JOBS" -C "$OTP_SRC/lib/crypto/c_src" TYPE=opt static_lib
 
-# Pass 1: build emulator objects (crypto.a already exists, no race)
-ERL_TOP="$OTP_SRC" make -j"$JOBS" -C "$OTP_SRC/erts/emulator" TYPE=opt
-
-# Pass 2: remove beam.smp to force a relink that pulls in crypto.a + libcrypto.a
-find "$OTP_SRC/bin" \( -name "beam.smp" -o -name "beam.jit" \) -delete
+# Build emulator — crypto.a is already present so it links in statically.
 ERL_TOP="$OTP_SRC" make -j"$JOBS" -C "$OTP_SRC/erts/emulator" TYPE=opt
 
 # Copy and strip
