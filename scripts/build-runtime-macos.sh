@@ -31,12 +31,7 @@ if [ ! -d "$OTP_SRC" ]; then
 fi
 
 # Apply gleepack patches
-cp otp/unix_prim_file.c        "$OTP_SRC/erts/emulator/nifs/unix/unix_prim_file.c"
-cp otp/gleepack_vfs.h          "$OTP_SRC/erts/emulator/nifs/unix/gleepack_vfs.h"
-cp otp/gleepack_entry.c        "$OTP_SRC/erts/emulator/sys/unix/erl_main.c"
-cp otp/gleepack_vfs.h          "$OTP_SRC/erts/emulator/sys/unix/gleepack_vfs.h"
-cp otp/sys_drivers.c           "$OTP_SRC/erts/emulator/sys/unix/sys_drivers.c"
-cp otp/inet_gethost_native.erl "$OTP_SRC/lib/kernel/src/inet_gethost_native.erl"
+OTP_SRC="$OTP_SRC" REPO_ROOT="$REPO_ROOT" "$REPO_ROOT/scripts/apply-patches.sh"
 
 # --- Configure ---
 # -Wl,-dead_strip removes unreachable code after final link (macOS linker flag).

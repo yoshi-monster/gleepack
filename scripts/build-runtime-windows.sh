@@ -11,7 +11,7 @@ set -xe
 
 OTP_VERSION="${OTP_VERSION:?OTP_VERSION required}"
 OTP_ARCH="${OTP_ARCH:-x64}"   # x64 or arm64, passed from workflow matrix
-REPO="${1:?repo path required}"
+REPO_ROOT="${1:?repo path required}"
 JOBS=$(($(nproc) + 2))
 
 # OTP source must live on the Windows filesystem - otp_build requires it
@@ -52,29 +52,22 @@ done
 
 # --- OTP source ---
 if [ ! -d "$OTP_SRC" ]; then
-    mkdir -p "$REPO/build"
-    curl -fSL -o "$REPO/build/otp-src.tar.gz" \
+    mkdir -p "$REPO_ROOT/build"
+    curl -fSL -o "$REPO_ROOT/build/otp-src.tar.gz" \
         "https://github.com/erlang/otp/releases/download/OTP-${OTP_VERSION}/otp_src_${OTP_VERSION}.tar.gz"
     mkdir -p "$OTP_SRC"
-    tar xzf "$REPO/build/otp-src.tar.gz" -C "$OTP_SRC" --strip-components=1
-    rm "$REPO/build/otp-src.tar.gz"
+    tar xzf "$REPO_ROOT/build/otp-src.tar.gz" -C "$OTP_SRC" --strip-components=1
+    rm "$REPO_ROOT/build/otp-src.tar.gz"
 fi
 
-# Apply gleepack patches (Windows-specific files)
-cp "$REPO/otp/win_prim_file.c"         "$OTP_SRC/erts/emulator/nifs/win32/win_prim_file.c"
-cp "$REPO/otp/gleepack_vfs.h"          "$OTP_SRC/erts/emulator/nifs/win32/gleepack_vfs.h"
-cp "$REPO/otp/gleepack_entry.c"        "$OTP_SRC/erts/emulator/sys/win32/erl_main.c"
-cp "$REPO/otp/gleepack_vfs.h"          "$OTP_SRC/erts/emulator/sys/win32/gleepack_vfs.h"
-cp "$REPO/otp/inet_gethost_native.erl" "$OTP_SRC/lib/kernel/src/inet_gethost_native.erl"
-# public_key.c: replace #ifdef WINVER with #ifdef _WIN32 and fix static linkage
-# (see otp/win_public_key.c for full rationale)
-cp "$REPO/otp/win_public_key.c"        "$OTP_SRC/lib/public_key/c_src/public_key.c"
+# Apply gleepack patches
+OTP_SRC="$OTP_SRC" REPO_ROOT="$REPO_ROOT" "$REPO_ROOT/scripts/apply-patches.sh"
 
 cd "$OTP_SRC"
 
 # Apply build-system patches (DLL→EXE, static NIFs, public_key static_lib).
 # Must run from $OTP_SRC; see scripts/patch-otp-windows.py for full rationale.
-python3 "$REPO/scripts/patch-otp-windows.py"
+python3 "$REPO_ROOT/scripts/patch-otp-windows.py"
 
 # --- Set up MSVC environment and configure ---
 export ERL_TOP="$(pwd)"
