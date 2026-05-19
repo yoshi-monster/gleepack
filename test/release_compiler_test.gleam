@@ -12,13 +12,13 @@ import simplifile
 
 fn make_dep(name: String, otp_app: String, src: String) -> project.Project {
   project.Gleam(
+    source: project.Hex,
     name:,
     version: "1.0.0",
     otp_app:,
     dependencies: [],
     is_dev: False,
     src:,
-    is_local: False,
     dev_dependencies: [],
     target: None,
     extra_applications: [],
@@ -36,7 +36,8 @@ pub fn discover_otp_apps_always_includes_kernel_stdlib_test() {
   let otp_dir = filepath.join(config.build_dir, "_test_disc_ks")
   let assert Ok(Nil) = simplifile.create_directory_all(otp_dir)
 
-  let assert Ok(apps) = release_compiler.discover_otp_apps([], otp_dir, mode.Release(module: "m"))
+  let assert Ok(apps) =
+    release_compiler.discover_otp_apps([], otp_dir, mode.Release(module: "m"))
   assert list.contains(apps, "kernel")
   assert list.contains(apps, "stdlib")
 
@@ -81,7 +82,12 @@ pub fn discover_otp_apps_reads_applications_from_app_files_test() {
 
   let dep = make_dep(dep_name, dep_name, ".")
 
-  let assert Ok(apps) = release_compiler.discover_otp_apps([dep], otp_dir, mode.Release(module: "m"))
+  let assert Ok(apps) =
+    release_compiler.discover_otp_apps(
+      [dep],
+      otp_dir,
+      mode.Release(module: "m"),
+    )
   assert list.contains(apps, "kernel")
   assert list.contains(apps, "stdlib")
 
@@ -106,7 +112,12 @@ pub fn discover_otp_apps_collects_transitively_test() {
 
   let dep = make_dep(dep_name, dep_name, ".")
 
-  let assert Ok(apps) = release_compiler.discover_otp_apps([dep], otp_dir, mode.Release(module: "m"))
+  let assert Ok(apps) =
+    release_compiler.discover_otp_apps(
+      [dep],
+      otp_dir,
+      mode.Release(module: "m"),
+    )
   assert list.contains(apps, "kernel")
   assert list.contains(apps, "stdlib")
 
@@ -186,13 +197,13 @@ pub fn collect_dependency_files_finds_beam_and_app_test() {
 
   let dep =
     project.Gleam(
+      source: project.Hex,
       name: "_test_dep_a",
       version: "1.0.0",
       otp_app: "_test_dep_a",
       dependencies: [],
-      is_dev: False,
       src: "build/packages/_test_dep_a",
-      is_local: False,
+      is_dev: False,
       dev_dependencies: [],
       target: None,
       extra_applications: [],
@@ -225,13 +236,13 @@ pub fn collect_dependency_files_skips_gleam_internal_modules_test() {
 
   let dep =
     project.Gleam(
+      source: project.Hex,
       name: "_test_dep_b",
       version: "1.0.0",
       otp_app: "_test_dep_b",
       dependencies: [],
       is_dev: False,
       src: "build/packages/_test_dep_b",
-      is_local: False,
       dev_dependencies: [],
       target: None,
       extra_applications: [],
@@ -268,13 +279,13 @@ pub fn collect_dependency_files_includes_priv_test() {
 
   let dep =
     project.Gleam(
+      source: project.Hex,
       name: "_test_dep_c",
       version: "1.0.0",
       otp_app: "_test_dep_c",
       dependencies: [],
       is_dev: False,
       src: src,
-      is_local: False,
       dev_dependencies: [],
       target: None,
       extra_applications: [],
@@ -330,4 +341,3 @@ pub fn collect_otp_apps_skips_missing_app_test() {
 
   let _ = simplifile.delete(otp_dir)
 }
-

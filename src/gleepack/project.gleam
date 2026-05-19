@@ -17,8 +17,15 @@ pub type Target {
   Javascript
 }
 
+pub type Source {
+  Hex
+  Local
+  Git
+}
+
 pub type Project {
   Gleam(
+    source: Source,
     name: String,
     version: String,
     otp_app: String,
@@ -26,7 +33,6 @@ pub type Project {
     is_dev: Bool,
     src: String,
     // gleam-specific options
-    is_local: Bool,
     dev_dependencies: List(String),
     target: Option(Target),
     extra_applications: List(String),
@@ -38,6 +44,7 @@ pub type Project {
     extra_emu_args: Option(String),
   )
   Rebar3(
+    source: Source,
     name: String,
     version: String,
     otp_app: String,
@@ -46,6 +53,7 @@ pub type Project {
     src: String,
   )
   Mix(
+    source: Source,
     name: String,
     version: String,
     otp_app: String,
@@ -62,12 +70,12 @@ pub fn read(
   from dir: String,
   available available: List(target.Target),
 ) -> Result(Project, Snag) {
-  read_internal(dir, True, available)
+  read_internal(dir, Local, available)
 }
 
 fn read_internal(
   from dir: String,
-  local is_local: Bool,
+  source source: Source,
   available available: List(target.Target),
 ) -> Result(Project, Snag) {
   use file_contents <- result.try(
@@ -82,7 +90,7 @@ fn read_internal(
     |> snag.context("Could not parse gleam.toml"),
   )
 
-  parse_project(project_file, dir, is_local, available)
+  parse_project(project_file, dir, source, available)
   |> snag.map_error(tom_get_error)
   |> snag.context("Could not parse gleam.toml")
 }
@@ -90,7 +98,7 @@ fn read_internal(
 fn parse_project(
   project_file: Dict(String, Toml),
   src: String,
-  is_local: Bool,
+  source: Source,
   available: List(target.Target),
 ) -> Result(Project, tom.GetError) {
   use name <- result.try(tom.get_string(project_file, ["name"]))
@@ -168,13 +176,13 @@ fn parse_project(
   )
 
   Ok(Gleam(
+    source:,
     name:,
     version:,
     otp_app: name,
     dependencies:,
     is_dev: False,
     src:,
-    is_local:,
     dev_dependencies:,
     target:,
     extra_applications:,
@@ -240,11 +248,14 @@ fn read_manifest_package(
     package |> tom.as_table |> snag.map_error(tom_get_error),
   )
 
-  use is_local <- result.try(
-    tom.get_string(pkg, ["source"])
-    |> result.map(fn(source) { source == "local" })
-    |> snag.map_error(tom_get_error),
-  )
+  use source <- result.try(case tom.get_string(pkg, ["source"]) {
+    Ok("git") -> Ok(Git)
+    Ok("local") -> Ok(Local)
+    Ok("hex") -> Ok(Hex)
+    Ok(_) ->
+      snag.error(tom_get_error(tom.WrongType(["source"], "Source", "String")))
+    Error(error) -> snag.error(tom_get_error(error))
+  })
 
   use name <- result.try(
     tom.get_string(pkg, ["name"]) |> snag.map_error(tom_get_error),
@@ -273,12 +284,20 @@ fn read_manifest_package(
 
   case build_tools_toml {
     [] -> snag.error("build_tools should not be empty")
-    [tom.String("gleam"), ..] -> read_internal(from: src, local: is_local, available:)
-    [tom.String("rebar3"), ..] | [tom.String("rebar"), ..] ->
-      Ok(Rebar3(name:, version:, otp_app:, dependencies:, is_dev: False, src:))
+    [tom.String("gleam"), ..] -> read_internal(from: src, source:, available:)
+    [tom.String("rebar3"), ..] | [tom.String("rebar"), ..] -> {
+      let is_dev = False
+      let project =
+        Rebar3(source:, name:, version:, otp_app:, dependencies:, is_dev:, src:)
+      Ok(project)
+    }
 
-    [tom.String("mix"), ..] ->
-      Ok(Mix(name:, version:, otp_app:, dependencies:, is_dev: False, src:))
+    [tom.String("mix"), ..] -> {
+      let is_dev = False
+      let project =
+        Mix(source:, name:, version:, otp_app:, dependencies:, is_dev:, src:)
+      Ok(project)
+    }
 
     [tom.String(other), ..] ->
       snag.error(

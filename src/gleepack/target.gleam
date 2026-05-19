@@ -368,6 +368,7 @@ pub fn uninstall(target: Target) -> Result(Nil, Snag) {
   )
 
   // GC: only remove OTP if no other installed targets still use this version.
+  // TODO: can we use installed() here?
   let runtime_base = filepath.join(cache, "runtime")
   use otp_still_needed <- result.try(
     case simplifile.read_directory(runtime_base) {

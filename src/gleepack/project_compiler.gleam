@@ -113,7 +113,7 @@ fn loop(state: LoopState) -> Result(Nil, Snag) {
       }
 
       snag.error("exited with code " <> int.to_string(code))
-      |> snag.context("Compiling " <> name)
+      |> snag.context("Compiling package " <> name)
     }
 
     Ok(BeamMsg(msg)) -> {
@@ -138,7 +138,7 @@ fn loop(state: LoopState) -> Result(Nil, Snag) {
 }
 
 // Starts the next compile if the in-flight slot is free.
-// Rebar3/Mix packages wait for the pending queue to drain first —
+// Rebar3/Mix packages wait for the pending queue to drain first -
 // they need all .beam files from previous Gleam packages to be present.
 fn maybe_start_compile(state: LoopState) -> Result(LoopState, Snag) {
   case state.in_flight, state.remaining {
@@ -396,9 +396,9 @@ fn spawn_mix(
 }
 
 fn package_stdio(project: Project) {
-  // Show errors for the main project (src = "."); suppress output for deps.
+  // Show errors for local porjects; suppress output for deps.
   case project {
-    Gleam(src: ".", ..) | Rebar3(..) | Mix(..) -> stdio.inherit()
+    Gleam(source: project.Local, ..) | Rebar3(..) | Mix(..) -> stdio.inherit()
     _ -> stdio.null()
   }
 }

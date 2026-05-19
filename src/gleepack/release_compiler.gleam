@@ -207,6 +207,8 @@ pub fn assemble(
     discover_otp_apps(dependencies, otp_directory, mode)
     |> snag.context("Discovering OTP application dependencies"),
   )
+
+  // TODO: do we really need to walk twice here (dependnecies vs otp apps)
   use dep_files <- result.try(
     collect_dependency_files(dependencies)
     |> snag.context("Collecting dependency files"),
@@ -268,7 +270,7 @@ pub fn build(
   compile_dependencies compile_dependencies: List(Project),
   target target: InstalledTarget,
 ) -> Result(BitArray, Snag) {
-  // Start the beam compiler once — shared between project and entrypoint compilation.
+  // Start the beam compiler once - shared between project and entrypoint compilation.
   use compiler <- result.try(
     beam_compiler.start(target)
     |> snag.context("Starting BEAM compiler"),

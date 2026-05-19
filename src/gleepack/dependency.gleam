@@ -20,7 +20,7 @@ type StackItem {
 
 /// Download all dependencies and prepare them for compilation.
 ///
-/// Runs `gleam deps download` for the entry project — this resolves the
+/// Runs `gleam deps download` for the entry project - this resolves the
 /// full transitive closure of path deps into the root `manifest.toml`. Each
 /// path dep's `gleam.toml`, `src/`, and `priv/` (when present) is then
 /// mirrored into `build/packages/<name>` so that test/ and dev/ are not
@@ -42,13 +42,35 @@ pub fn download(
   use manifest <- result.try(project.manifest(available))
 
   use rewritten <- result.try({
-    use acc, #(name, p) <- list.try_fold(dict.to_list(manifest), [])
-    case p {
-      project.Gleam(is_local: True, src:, name: dep_name, ..) if src != "." -> {
+    use acc, #(name, project) <- list.try_fold(dict.to_list(manifest), [])
+
+    case project {
+      // The Gleam compiler builds path dependencies directly from their source directory.
+      // This directory includes test and dev files - which we want to skip.
+      // We also can't touch the original files - so we either symlink or copy them
+      // into the `build/packages` directory ourselfes.
+      project.Gleam(source: project.Local, src:, name: dep_name, ..)
+        if src != "."
+      -> {
         use _ <- result.map(mirror_path_dep(dep_name, src, cwd))
-        [#(name, project.Gleam(..p, src: mirror_dest(dep_name))), ..acc]
+        [#(name, project.Gleam(..project, src: mirror_dest(dep_name))), ..acc]
       }
-      _ -> Ok([#(name, p), ..acc])
+
+      // The Gleam compiler checks out the entire repository and then builds that directly.
+      // Again there is no way to skip test and dev files - so we manually delete this beforehand.
+      project.Gleam(source: project.Git, src:, name:, ..) -> {
+        let paths = [filepath.join(src, "test"), filepath.join(src, "dev")]
+
+        use _ <- result.try(
+          simplifile.delete_all(paths)
+          |> snag.map_error(simplifile.describe_error)
+          |> snag.context("Deleting test and dev directories for " <> name),
+        )
+
+        Ok([#(name, project), ..acc])
+      }
+
+      _ -> Ok([#(name, project), ..acc])
     }
   })
 
