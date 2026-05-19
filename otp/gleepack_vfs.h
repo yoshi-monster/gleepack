@@ -39,18 +39,19 @@ extern int g_debug;
  * efile_gleepack_t can be safely cast to efile_data_t * and back (C-style
  * inheritance, matching the efile_unix_t / efile_win_t pattern). */
 typedef struct {
-    efile_data_t   common; /* MUST be first — cast compatibility */
+    efile_data_t   common; /* MUST be first - cast compatibility */
     uint32_t       magic;  /* == GLEEPACK_MAGIC */
     const uint8_t  *buf;    /* pointer into cached buffer (read-only) */
     size_t         size;   /* total uncompressed size */
     size_t         pos;    /* current read position */
+    int            sendfile_fd; /* anonymous fd for gen_tcp:sendfile; -1 if none */
 } efile_gleepack_t;
 #endif /* GLEEPACK_HAVE_EFILE_DATA */
 
-/* One entry in the VFS index.  HashBucket MUST be the first field — required
+/* One entry in the VFS index.  HashBucket MUST be the first field - required
  * by hash.h so that (HashBucket *) == (gleepack_index_entry_t *). */
 typedef struct {
-    HashBucket bucket;              /* MUST be first — required by hash.h */
+    HashBucket bucket;              /* MUST be first - required by hash.h */
     char      *filename;            /* malloc'd, NUL-terminated */
     size_t     filename_len;
     uint16_t   compression;         /* 0=STORED, 8=DEFLATE */

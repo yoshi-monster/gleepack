@@ -8,6 +8,7 @@ main() ->
 
 main([Lib]) ->
     ok = io:setopts([binary, {encoding, unicode}]),
+    logger:remove_handler(default),
     {ok, _} = application:ensure_all_started([compiler, elixir]),
     [code:add_patha(P) || P <- filelib:wildcard([Lib, "/*/ebin"])],
     Parent = self(),
@@ -32,11 +33,21 @@ reader_loop(Dispatcher) ->
 dispatcher_loop(Pending) ->
     receive
         {compiled, Module, Modules} ->
-            io:put_chars(["gleepack-compile-ok ", format_result(Module, Modules), "\n"]),
-            dispatcher_loop(Pending - 1);
+            try
+                io:put_chars(["gleepack-compile-ok ", format_result(Module, Modules), "\n"]),
+                dispatcher_loop(Pending - 1)
+            catch
+                error:terminated -> nil;
+                error:epipe -> nil
+            end;
         {failed, Module} ->
-            io:put_chars(["gleepack-compile-error ", format_result(Module, []), "\n"]),
-            dispatcher_loop(Pending - 1);
+            try
+                io:put_chars(["gleepack-compile-error ", format_result(Module, []), "\n"]),
+                dispatcher_loop(Pending - 1)
+            catch
+                error:terminated -> nil;
+                error:epipe -> nil
+            end;
         eof ->
             drain(Pending);
         Line when is_binary(Line); is_list(Line) ->
@@ -60,10 +71,12 @@ drain(0) ->
 drain(Pending) ->
     receive
         {compiled, Module, Modules} ->
-            io:put_chars(["gleepack-compile-ok ", format_result(Module, Modules), "\n"]),
+            try io:put_chars(["gleepack-compile-ok ", format_result(Module, Modules), "\n"])
+            catch error:terminated -> nil; error:epipe -> nil end,
             drain(Pending - 1);
         {failed, Module} ->
-            io:put_chars(["gleepack-compile-error ", format_result(Module, []), "\n"]),
+            try io:put_chars(["gleepack-compile-error ", format_result(Module, []), "\n"])
+            catch error:terminated -> nil; error:epipe -> nil end,
             drain(Pending - 1)
     end.
 
@@ -102,7 +115,9 @@ compile_erlang(Module, Out) ->
          report_warnings,
          no_docs,
          {outdir, unicode:characters_to_list(Out)}],
-    case compile:file(unicode:characters_to_list(Module), Options) of
+    case compile:file(
+             unicode:characters_to_list(Module), Options)
+    of
         {ok, ModuleName} ->
             {ok, [ModuleName]};
         error ->

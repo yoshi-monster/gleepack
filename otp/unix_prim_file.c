@@ -46,6 +46,7 @@
 #include <utime.h>
 #include <stdio.h>
 
+
 #define GLEEPACK_HAVE_EFILE_DATA
 #include "gleepack_vfs.h"
 
@@ -104,10 +105,59 @@ posix_errno_t efile_marshal_path(ErlNifEnv *env, ERL_NIF_TERM path, efile_path_t
     return 0;
 }
 
+/* Creates an fd containing the VFS file data, seeked to 0, suitable for sendfile.
+ * Linux: memfd_create (anonymous memory fd, sendfile accepts it).
+ * Other: mkstemp + unlink (real filesystem fd; shm_open fds are memory-backed and
+ *        macOS sendfile() rejects them; unlink removes the directory entry immediately,
+ *        kernel holds the data until fd closes).
+ * Returns 0 and sets *fd_out on success, or a posix errno on failure. */
+static posix_errno_t vfs_make_anon_fd(efile_gleepack_t *g, int *fd_out) {
+    int fd;
+#ifdef __linux__
+    fd = memfd_create("gleepack_vfs", 0);
+    if (fd < 0) { GLEEPACK_LOG("vfs anon fd: memfd_create failed: %d", errno); return errno; }
+#else
+    char path[] = "/tmp/gleepack_XXXXXX";
+    fd = mkstemp(path);
+    if (fd < 0) { GLEEPACK_LOG("vfs anon fd: mkstemp failed: %d", errno); return errno; }
+    unlink(path);
+#endif
+    if (g->size > 0 && write(fd, g->buf, g->size) != (ssize_t)g->size) {
+        int err = errno;
+        GLEEPACK_LOG("vfs anon fd: write failed: %d", err);
+        close(fd);
+        return err ? err : EIO;
+    }
+    GLEEPACK_LOG("vfs anon fd: created fd=%d size=%zu", fd, g->size);
+    *fd_out = fd;
+    return 0;
+}
+
+/* Called only from prim_file:sendfile/8 → prim_inet:sendfile (gen_tcp sendfile path).
+ * Not used for normal I/O. For VFS handles, creates an anonymous fd backed by the
+ * in-memory data so the inet driver can dup() and use it like a real file. */
 ERL_NIF_TERM efile_get_handle(ErlNifEnv *env, efile_data_t *d) {
     if (gleepack_is_handle(d)) {
+        efile_gleepack_t *g = (efile_gleepack_t *)d;
         ERL_NIF_TERM handle;
-        enif_make_new_binary(env, 0, &handle);
+        int fd;
+
+        if (g->sendfile_fd >= 0) {
+            close(g->sendfile_fd);
+            g->sendfile_fd = -1;
+        }
+
+        GLEEPACK_LOG("vfs get_handle: creating anon fd for sendfile (gen_tcp path)");
+        if (vfs_make_anon_fd(g, &fd) != 0) {
+            /* On failure return empty binary; prim_inet will return einval
+             * and the caller will see an error rather than corrupt data. */
+            enif_make_new_binary(env, 0, &handle);
+            return handle;
+        }
+
+        g->sendfile_fd = fd;
+        unsigned char *bits = enif_make_new_binary(env, sizeof(fd), &handle);
+        memcpy(bits, &fd, sizeof(fd));
         return handle;
     }
     efile_unix_t *u = (efile_unix_t*)d;
@@ -121,8 +171,19 @@ ERL_NIF_TERM efile_get_handle(ErlNifEnv *env, efile_data_t *d) {
     return handle;
 }
 
+/* Called only from the socket:sendfile NIF (prim_socket), which takes full ownership
+ * of the returned fd and closes it when done. For VFS handles, creates an anonymous
+ * fd backed by the in-memory data. No cleanup needed on our side. */
 posix_errno_t efile_dup_handle(ErlNifEnv *env, efile_data_t *d, ErlNifEvent *handle) {
-    if (gleepack_is_handle(d)) return EBADF;
+    if (gleepack_is_handle(d)) {
+        efile_gleepack_t *g = (efile_gleepack_t *)d;
+        int fd;
+        GLEEPACK_LOG("vfs dup_handle: creating anon fd for sendfile (socket path)");
+        posix_errno_t err = vfs_make_anon_fd(g, &fd);
+        if (err) return err;
+        *handle = fd;
+        return 0;
+    }
     efile_unix_t *u = (efile_unix_t*)d;
     int fd;
 
@@ -202,10 +263,11 @@ posix_errno_t efile_open(const efile_path_t *path, enum efile_modes_t modes,
         GLEEPACK_LOG("vfs open: %s", vfs_path);
         efile_gleepack_t *g = (efile_gleepack_t *)enif_alloc_resource(
             nif_type, sizeof(efile_gleepack_t));
-        g->magic = GLEEPACK_MAGIC;
-        g->buf   = data;
-        g->size  = entry->uncomp_size;
-        g->pos   = 0;
+        g->magic       = GLEEPACK_MAGIC;
+        g->buf         = data;
+        g->size        = entry->uncomp_size;
+        g->pos         = 0;
+        g->sendfile_fd = -1;
         EFILE_INIT_RESOURCE(&g->common, modes);
         (*d) = &g->common;
         return 0;
@@ -281,6 +343,11 @@ posix_errno_t efile_from_fd(int fd,
 
 int efile_close(efile_data_t *d, posix_errno_t *error) {
     if (gleepack_is_handle(d)) {
+        efile_gleepack_t *g = (efile_gleepack_t *)d;
+        if (g->sendfile_fd >= 0) {
+            close(g->sendfile_fd);
+            g->sendfile_fd = -1;
+        }
         enif_release_resource(d);
         return 1;
     }
@@ -847,12 +914,12 @@ posix_errno_t efile_read_info(const efile_path_t *path, int follow_links, efile_
             result->type   = EFILE_FILETYPE_REGULAR;
             result->size   = entry->uncomp_size;
             result->access = EFILE_ACCESS_READ;
-            result->mode   = 0444;  /* r--r--r-- */
+            result->mode   = S_IFREG | 0444;
             result->links  = 1;
             return 0;
         }
 
-        /* Check if it's a directory prefix — use foreach since index is a Hash* */
+        /* Check if it's a directory prefix - use foreach since index is a Hash* */
         size_t vfs_path_len = strlen(vfs_path);
         /* Strip trailing slash before prefix check */
         while (vfs_path_len > 0 && vfs_path[vfs_path_len - 1] == '/') vfs_path_len--;
@@ -866,7 +933,7 @@ posix_errno_t efile_read_info(const efile_path_t *path, int follow_links, efile_
             memset(result, 0, sizeof(*result));
             result->type   = EFILE_FILETYPE_DIRECTORY;
             result->access = EFILE_ACCESS_READ;
-            result->mode   = 0555;
+            result->mode   = S_IFDIR | 0555;
             result->links  = 1;
             return 0;
         }

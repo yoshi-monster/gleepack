@@ -96,9 +96,9 @@
  * /__gleepack__/ is volumerelative on Windows, so it resolves to the
  * long-path form \\?\X:\__gleepack__\... (backslashes, drive letter).
  * We detect and extract VFS paths from this canonical form. */
-#define GLEEPACK_NORM_HEAD      L"\\\\?\\"           /* \\?\  — 4 WCHARs */
+#define GLEEPACK_NORM_HEAD      L"\\\\?\\"           /* \\?\  - 4 WCHARs */
 #define GLEEPACK_NORM_HEAD_LEN  4
-#define GLEEPACK_NORM_TAIL      L":\\__gleepack__\\" /* :\__gleepack__\  — 15 WCHARs */
+#define GLEEPACK_NORM_TAIL      L":\\__gleepack__\\" /* :\__gleepack__\  - 15 WCHARs */
 #define GLEEPACK_NORM_TAIL_LEN  15
 #define GLEEPACK_NORM_TOTAL     20                   /* total prefix WCHARs */
 
@@ -177,7 +177,7 @@ static void check_prefix(gleepack_index_entry_t *e, void *arg) {
     }
 }
 
-/* list_dir helpers — collect immediate children of a VFS directory. */
+/* list_dir helpers - collect immediate children of a VFS directory. */
 typedef struct {
     const char *dir_prefix;   /* vfs path without /__gleepack__/ prefix, no trailing slash */
     size_t      dir_len;
@@ -1496,7 +1496,7 @@ posix_errno_t efile_list_dir(ErlNifEnv *env, const efile_path_t *path, ERL_NIF_T
             }
             /* Convert narrow name to WCHAR for Windows Erlang encoding.
              * Use explicit length (not -1) so the NUL terminator is excluded
-             * from the binary — Erlang expects length-delimited binaries. */
+             * from the binary - Erlang expects length-delimited binaries. */
             ERL_NIF_TERM term;
             int name_len = (int)strlen(name);
             int len = MultiByteToWideChar(CP_UTF8, 0, name, name_len, NULL, 0);
