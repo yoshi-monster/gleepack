@@ -74,7 +74,7 @@ jobs:
 
       - name: Package toolchain
         run: |
-          cd /tmp/toolchain
+          cd "$GITHUB_WORKSPACE/build/toolchain"
           zip -qr "/tmp/otp-${OTP_VERSION}.zip" .
 
       - name: Upload toolchain to release
@@ -115,8 +115,8 @@ jobs:
 
       - name: Package runtime
         run: |
-          cd /tmp
-          zip "gleepack-${{ matrix.arch }}-linux-otp-${OTP_VERSION}.zip" gleepack
+          cd "$GITHUB_WORKSPACE/build/runtime"
+          zip "/tmp/gleepack-${{ matrix.arch }}-linux-otp-${OTP_VERSION}.zip" gleepack
 
       - name: Upload runtime to release
         run: |
@@ -150,8 +150,8 @@ jobs:
 
       - name: Package and upload
         run: |
-          cd /tmp
-          zip "gleepack-${{ matrix.arch }}-macos-otp-${OTP_VERSION}.zip" gleepack
+          cd "$GITHUB_WORKSPACE/build/runtime"
+          zip "/tmp/gleepack-${{ matrix.arch }}-macos-otp-${OTP_VERSION}.zip" gleepack
           gh release upload "OTP-${OTP_VERSION}" \
             "/tmp/gleepack-${{ matrix.arch }}-macos-otp-${OTP_VERSION}.zip" \
             --repo ${{ github.repository }} \
