@@ -51,11 +51,14 @@ for name in ssl libssl; do
 done
 
 # --- OTP source ---
-curl -fSL -o /tmp/otp-src.tar.gz \
-    "https://github.com/erlang/otp/releases/download/OTP-${OTP_VERSION}/otp_src_${OTP_VERSION}.tar.gz"
-mkdir -p "$OTP_SRC"
-tar xzf /tmp/otp-src.tar.gz -C "$OTP_SRC" --strip-components=1
-rm /tmp/otp-src.tar.gz
+if [ ! -d "$OTP_SRC" ]; then
+    mkdir -p "$REPO/build"
+    curl -fSL -o "$REPO/build/otp-src.tar.gz" \
+        "https://github.com/erlang/otp/releases/download/OTP-${OTP_VERSION}/otp_src_${OTP_VERSION}.tar.gz"
+    mkdir -p "$OTP_SRC"
+    tar xzf "$REPO/build/otp-src.tar.gz" -C "$OTP_SRC" --strip-components=1
+    rm "$REPO/build/otp-src.tar.gz"
+fi
 
 # Apply gleepack patches (Windows-specific files)
 cp "$REPO/otp/win_prim_file.c"         "$OTP_SRC/erts/emulator/nifs/win32/win_prim_file.c"

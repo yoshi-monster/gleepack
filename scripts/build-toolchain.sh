@@ -4,7 +4,7 @@
 #
 # Required env: OTP_VERSION, REBAR3_VERSION
 # Optional env: ELIXIR_VERSION (default: 1.18.3)
-# Output: /tmp/toolchain/ - zip this as otp-$OTP_VERSION.zip
+# Output: ./build/toolchain/ - zip this as otp-$OTP_VERSION.zip
 
 set -xe
 
@@ -13,26 +13,32 @@ REBAR3_VERSION="${REBAR3_VERSION:?REBAR3_VERSION required}"
 ELIXIR_VERSION="${ELIXIR_VERSION:-1.18.3}"
 
 JOBS=$(nproc 2>/dev/null || echo 4)
-OTP_SRC=/usr/src/otp
-REBAR3_SRC=/usr/src/rebar3
-ELIXIR_SRC=/usr/src/elixir
-INSTALL_PREFIX=/tmp/otp-install
-TOOLCHAIN_DIR=/tmp/toolchain
+REPO_ROOT=$(pwd)
+OTP_SRC="$REPO_ROOT/build/otp"
+REBAR3_SRC="$REPO_ROOT/build/rebar3"
+ELIXIR_SRC="$REPO_ROOT/build/elixir"
+INSTALL_PREFIX="$REPO_ROOT/build/otp-install"
+TOOLCHAIN_DIR="$REPO_ROOT/build/toolchain"
 
 # --- Dependencies ---
-apk add --no-cache \
-    curl ca-certificates \
-    perl clang libc-dev linux-headers make \
-    ncurses-dev ncurses-static \
-    libressl-dev \
-    rsync zip
+if [ "${INSTALL_DEPS:-1}" = "1" ]; then
+    apk add --no-cache \
+        curl ca-certificates \
+        perl clang libc-dev linux-headers make \
+        ncurses-dev ncurses-static \
+        libressl-dev \
+        rsync zip
+fi
 
 # --- OTP source ---
-curl -fSL -o /tmp/otp-src.tar.gz \
-    "https://github.com/erlang/otp/releases/download/OTP-${OTP_VERSION}/otp_src_${OTP_VERSION}.tar.gz"
-mkdir -p "$OTP_SRC"
-tar xzf /tmp/otp-src.tar.gz -C "$OTP_SRC" --strip-components=1
-rm /tmp/otp-src.tar.gz
+if [ ! -d "$OTP_SRC" ]; then
+    mkdir -p "$REPO_ROOT/build"
+    curl -fSL -o "$REPO_ROOT/build/otp-src.tar.gz" \
+        "https://github.com/erlang/otp/releases/download/OTP-${OTP_VERSION}/otp_src_${OTP_VERSION}.tar.gz"
+    mkdir -p "$OTP_SRC"
+    tar xzf "$REPO_ROOT/build/otp-src.tar.gz" -C "$OTP_SRC" --strip-components=1
+    rm "$REPO_ROOT/build/otp-src.tar.gz"
+fi
 
 # Apply gleepack patches
 cp otp/unix_prim_file.c        "$OTP_SRC/erts/emulator/nifs/unix/unix_prim_file.c"
@@ -66,11 +72,14 @@ ERL_TOP="$OTP_SRC" make -j"$JOBS" -k TYPE=opt || true
 ERL_TOP="$OTP_SRC" make install
 
 # --- rebar3 ---
-curl -fSL -o /tmp/rebar3-src.tar.gz \
-    "https://github.com/erlang/rebar3/archive/${REBAR3_VERSION}.tar.gz"
-mkdir -p "$REBAR3_SRC"
-tar xzf /tmp/rebar3-src.tar.gz -C "$REBAR3_SRC" --strip-components=1
-rm /tmp/rebar3-src.tar.gz
+if [ ! -d "$REBAR3_SRC" ]; then
+    mkdir -p "$REPO_ROOT/build"
+    curl -fSL -o "$REPO_ROOT/build/rebar3-src.tar.gz" \
+        "https://github.com/erlang/rebar3/archive/${REBAR3_VERSION}.tar.gz"
+    mkdir -p "$REBAR3_SRC"
+    tar xzf "$REPO_ROOT/build/rebar3-src.tar.gz" -C "$REBAR3_SRC" --strip-components=1
+    rm "$REPO_ROOT/build/rebar3-src.tar.gz"
+fi
 
 cd "$REBAR3_SRC"
 PATH="$INSTALL_PREFIX/bin:$PATH" \
@@ -80,11 +89,14 @@ ERL_COMPILER_OPTIONS="[nowarn_deprecated_catch,nowarn_match_alias_pats]" \
 ./bootstrap
 
 # --- Elixir ---
-curl -fSL -o /tmp/elixir-src.tar.gz \
-    "https://github.com/elixir-lang/elixir/archive/v${ELIXIR_VERSION}.tar.gz"
-mkdir -p "$ELIXIR_SRC"
-tar xzf /tmp/elixir-src.tar.gz -C "$ELIXIR_SRC" --strip-components=1
-rm /tmp/elixir-src.tar.gz
+if [ ! -d "$ELIXIR_SRC" ]; then
+    mkdir -p "$REPO_ROOT/build"
+    curl -fSL -o "$REPO_ROOT/build/elixir-src.tar.gz" \
+        "https://github.com/elixir-lang/elixir/archive/v${ELIXIR_VERSION}.tar.gz"
+    mkdir -p "$ELIXIR_SRC"
+    tar xzf "$REPO_ROOT/build/elixir-src.tar.gz" -C "$ELIXIR_SRC" --strip-components=1
+    rm "$REPO_ROOT/build/elixir-src.tar.gz"
+fi
 
 cd "$ELIXIR_SRC"
 PATH="$INSTALL_PREFIX/bin:$PATH" make -j"$JOBS" compile

@@ -3,28 +3,35 @@
 # for Alpine Linux (musl libc).
 #
 # Required env: OTP_VERSION
-# Output: /tmp/gleepack - stripped beam.smp ready to package
+# Output: ./build/runtime/gleepack - stripped beam.smp ready to package
 
 set -xe
 
 OTP_VERSION="${OTP_VERSION:?OTP_VERSION required}"
 
 JOBS=$(nproc 2>/dev/null || echo 4)
-OTP_SRC=/usr/src/otp
+REPO_ROOT=$(pwd)
+OTP_SRC="$REPO_ROOT/build/otp"
+RUNTIME_OUT="$REPO_ROOT/build/runtime"
 
 # --- Dependencies ---
-apk add --no-cache \
-    curl ca-certificates \
-    perl clang libc-dev linux-headers make \
-    ncurses-dev ncurses-static \
-    libressl-dev zip
+if [ "${INSTALL_DEPS:-1}" = "1" ]; then
+    apk add --no-cache \
+        curl ca-certificates \
+        perl clang libc-dev linux-headers make \
+        ncurses-dev ncurses-static \
+        libressl-dev zip
+fi
 
 # --- OTP source ---
-curl -fSL -o /tmp/otp-src.tar.gz \
-    "https://github.com/erlang/otp/releases/download/OTP-${OTP_VERSION}/otp_src_${OTP_VERSION}.tar.gz"
-mkdir -p "$OTP_SRC"
-tar xzf /tmp/otp-src.tar.gz -C "$OTP_SRC" --strip-components=1
-rm /tmp/otp-src.tar.gz
+if [ ! -d "$OTP_SRC" ]; then
+    mkdir -p "$REPO_ROOT/build"
+    curl -fSL -o "$REPO_ROOT/build/otp-src.tar.gz" \
+        "https://github.com/erlang/otp/releases/download/OTP-${OTP_VERSION}/otp_src_${OTP_VERSION}.tar.gz"
+    mkdir -p "$OTP_SRC"
+    tar xzf "$REPO_ROOT/build/otp-src.tar.gz" -C "$OTP_SRC" --strip-components=1
+    rm "$REPO_ROOT/build/otp-src.tar.gz"
+fi
 
 # Apply gleepack patches
 cp otp/unix_prim_file.c        "$OTP_SRC/erts/emulator/nifs/unix/unix_prim_file.c"
@@ -89,6 +96,7 @@ ERL_TOP="$OTP_SRC" make -j"$JOBS" -C "$OTP_SRC/erts/emulator" TYPE=opt
 # Copy and strip
 BEAM=$(find "$OTP_SRC/bin" -name "beam.smp" -type f | head -1)
 strip "$BEAM"
-cp "$BEAM" /tmp/gleepack
+mkdir -p "$RUNTIME_OUT"
+cp "$BEAM" "$RUNTIME_OUT/gleepack"
 
-echo "gleepack runtime -> /tmp/gleepack"
+echo "gleepack runtime -> $RUNTIME_OUT/gleepack"
