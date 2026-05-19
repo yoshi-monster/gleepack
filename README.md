@@ -198,15 +198,14 @@ gleepack is written in Gleam with a small amount of C for the BEAM patches.
 ### Development workflow
 
 ```sh
-# Build the CLI
+# Builds every locally into ./build/
 make
 
-# Build and install the patched OTP runtime (takes a while on first run)
-make assemble
+# Build individual components
+make runtime toolchain cli
 
-# Run the test application
-make test-release
-make test-run
+# Copy things into locations I use to test locally
+make copy-dev
 ```
 
 The workflow right now is a bit rough since it's only been me working on it and i didn't super mind the friction until things were ready. But it can definitely be improved a lot! Please reach out to me on Discord or make an issue if you have questions!
