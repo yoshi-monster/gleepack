@@ -300,7 +300,9 @@ pub type InstalledTarget {
 }
 
 pub fn installed() -> Result(List(InstalledTarget), Snag) {
-  let cache = config.cache_dir()
+  use cache <- result.try(
+    config.cache_dir() |> snag.map_error(config.describe_error),
+  )
   let runtime_base = filepath.join(cache, "runtime")
 
   use dirs <- result.try(case simplifile.read_directory(runtime_base) {
@@ -340,7 +342,9 @@ pub fn installed() -> Result(List(InstalledTarget), Snag) {
 }
 
 pub fn install(target: Target) -> Result(InstalledTarget, Snag) {
-  let cache = config.cache_dir()
+  use cache <- result.try(
+    config.cache_dir() |> snag.map_error(config.describe_error),
+  )
 
   use runtime_binary <- result.try(
     install_runtime(cache, target)
@@ -356,7 +360,9 @@ pub fn install(target: Target) -> Result(InstalledTarget, Snag) {
 }
 
 pub fn uninstall(target: Target) -> Result(Nil, Snag) {
-  let cache = config.cache_dir()
+  use cache <- result.try(
+    config.cache_dir() |> snag.map_error(config.describe_error),
+  )
 
   io.println(
     ansi.pink("   Removing") <> " " <> config.app_name <> " " <> slug(target),
