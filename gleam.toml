@@ -35,8 +35,8 @@ gleeunit = ">= 1.9.0 and < 2.0.0"
 output = "dist/gleepack"
 
 targets = [
-    "aarch64-linux-otp-29.0",
-    "aarch64-macos-otp-29.0",
-    "amd64-linux-otp-29.0",
-    "amd64-win32-otp-29.0"
+    "aarch64-linux-otp-29.1",
+    "aarch64-macos-otp-29.1",
+    "amd64-linux-otp-29.1",
+    "amd64-win32-otp-29.1"
 ]
