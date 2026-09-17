@@ -189,8 +189,8 @@ fn on_compile_finished(
 ) -> Result(LoopState, Snag) {
   case project {
     Gleam(name:, dependencies:, dev_dependencies:, extra_applications:, ..) -> {
-      let out = filepath.join(config.build_dir, name)
-      let ebin = filepath.join(out, "ebin")
+      let out = config.package_build_dir(name)
+      let ebin = config.package_ebin_dir(name)
       use Nil <- result.try(beam_compiler.add_path(state.compiler, ebin))
       let artefacts = collect_artefacts(project, state.mode, out)
       let modules =
@@ -251,21 +251,19 @@ fn on_compile_finished(
 
     Mix(src:, name:, otp_app:, ..) -> {
       use Nil <- result.try(place_mix_output(src, name, otp_app))
-      use Nil <- result.try(
-        filepath.join(config.build_dir, name)
-        |> filepath.join("ebin")
-        |> beam_compiler.add_path(state.compiler, _),
-      )
+      use Nil <- result.try(beam_compiler.add_path(
+        state.compiler,
+        config.package_ebin_dir(name),
+      ))
       io.println(ansi.pink("   Compiled ") <> name)
       Ok(LoopState(..state, in_flight: None))
     }
 
     Rebar3(name:, ..) -> {
-      use Nil <- result.try(
-        filepath.join(config.build_dir, name)
-        |> filepath.join("ebin")
-        |> beam_compiler.add_path(state.compiler, _),
-      )
+      use Nil <- result.try(beam_compiler.add_path(
+        state.compiler,
+        config.package_ebin_dir(name),
+      ))
       io.println(ansi.pink("   Compiled ") <> name)
       Ok(LoopState(..state, in_flight: None))
     }
@@ -308,11 +306,7 @@ fn is_test_artefact(package_src: String, module_name: String) -> Bool {
 fn spawn(project: Project, target: InstalledTarget) -> Result(Process, Snag) {
   use _ <- result.try(case project {
     Mix(..) -> Ok(Nil)
-    _ ->
-      io.create_directory_all(
-        filepath.join(config.build_dir, project.name)
-        |> filepath.join("ebin"),
-      )
+    _ -> io.create_directory_all(config.package_ebin_dir(project.name))
   })
   case project {
     Gleam(..) -> start_gleam_compiler(project)
@@ -322,7 +316,7 @@ fn spawn(project: Project, target: InstalledTarget) -> Result(Process, Snag) {
 }
 
 fn start_gleam_compiler(project: Project) -> Result(Process, Snag) {
-  let out = filepath.join(config.build_dir, project.name)
+  let out = config.package_build_dir(project.name)
   io.from_name("gleam")
   |> io.arg("compile-package")
   |> io.arg("--no-beam")
@@ -337,7 +331,7 @@ fn start_rebar3_compiler(
   project: Project,
   target: InstalledTarget,
 ) -> Result(Process, Snag) {
-  let out = filepath.join(config.build_dir, project.name)
+  let out = config.package_build_dir(project.name)
   // project.src is always build/packages/<name>, so ../../../ reaches the entry package.
   let rebar_out = "../../.." |> filepath.join(out)
   let ebin_glob =
@@ -405,7 +399,7 @@ fn place_mix_output(
     src
     |> filepath.join("_build/prod/lib")
     |> filepath.join(otp_app)
-  let destination = filepath.join(config.build_dir, name)
+  let destination = config.package_build_dir(name)
 
   io.replace_with_link_or_copy_directory(source, destination)
   |> snag.context("Placing Mix output for " <> otp_app)

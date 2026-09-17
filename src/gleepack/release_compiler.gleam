@@ -42,9 +42,7 @@ pub fn discover_otp_apps(
   use seed <- result.try(
     list.try_fold(dependencies, [], fn(acc, dep) {
       let path =
-        config.build_dir
-        |> filepath.join(dep.name)
-        |> filepath.join("ebin")
+        config.package_ebin_dir(dep.name)
         |> filepath.join(dep.otp_app <> ".app")
       case app_file.read(path) {
         Ok(app) -> Ok(list.append(acc, app.applications))
@@ -121,8 +119,7 @@ pub fn collect_dependency_files(
 }
 
 fn collect_ebin_files(dep: Project) -> Result(List(#(String, BitArray)), Snag) {
-  let src_dir =
-    config.build_dir |> filepath.join(dep.name) |> filepath.join("ebin")
+  let src_dir = config.package_ebin_dir(dep.name)
   let dst_dir = "lib/" <> dep.otp_app <> "/ebin"
 
   use file_paths <- result.try(get_files(src_dir, dep.name))
@@ -331,10 +328,7 @@ fn compile_entrypoint(
   compiler: BeamCompiler,
 ) -> Result(BitArray, Snag) {
   let erl_path = filepath.join(config.build_dir, "gleepack_main.erl")
-  let ebin_path =
-    config.build_dir
-    |> filepath.join(project.name)
-    |> filepath.join("ebin")
+  let ebin_path = config.package_ebin_dir(project.name)
 
   use Nil <- result.try(io.create_directory_all(ebin_path))
 

@@ -68,7 +68,7 @@ fn write_app_file(
 
 pub fn discover_otp_apps_reads_applications_from_app_files_test() {
   let dep_name = "_test_disc_a"
-  let ebin = filepath.join(config.build_dir, dep_name) |> filepath.join("ebin")
+  let ebin = config.package_ebin_dir(dep_name)
   let assert Ok(Nil) = simplifile.create_directory_all(ebin)
   write_app_file(ebin, dep_name, ["kernel", "stdlib"])
 
@@ -98,7 +98,7 @@ pub fn discover_otp_apps_reads_applications_from_app_files_test() {
 pub fn discover_otp_apps_collects_transitively_test() {
   // dep -> kernel -> stdlib (kernel's .app lists stdlib)
   let dep_name = "_test_disc_b"
-  let ebin = filepath.join(config.build_dir, dep_name) |> filepath.join("ebin")
+  let ebin = config.package_ebin_dir(dep_name)
   let assert Ok(Nil) = simplifile.create_directory_all(ebin)
   write_app_file(ebin, dep_name, ["kernel"])
 
@@ -128,7 +128,7 @@ pub fn discover_otp_apps_collects_transitively_test() {
 pub fn discover_otp_apps_excludes_project_deps_test() {
   let dep_a = "_test_disc_c_a"
   let dep_b = "_test_disc_c_b"
-  let ebin_a = filepath.join(config.build_dir, dep_a) |> filepath.join("ebin")
+  let ebin_a = config.package_ebin_dir(dep_a)
   let assert Ok(Nil) = simplifile.create_directory_all(ebin_a)
   // dep_a lists dep_b and kernel in applications
   write_app_file(ebin_a, dep_a, [dep_b, "kernel"])
@@ -157,8 +157,8 @@ pub fn discover_otp_apps_deduplicates_test() {
   // Two deps both list kernel
   let dep_a = "_test_disc_d_a"
   let dep_b = "_test_disc_d_b"
-  let ebin_a = filepath.join(config.build_dir, dep_a) |> filepath.join("ebin")
-  let ebin_b = filepath.join(config.build_dir, dep_b) |> filepath.join("ebin")
+  let ebin_a = config.package_ebin_dir(dep_a)
+  let ebin_b = config.package_ebin_dir(dep_b)
   let assert Ok(Nil) = simplifile.create_directory_all(ebin_a)
   let assert Ok(Nil) = simplifile.create_directory_all(ebin_b)
   write_app_file(ebin_a, dep_a, ["kernel"])
