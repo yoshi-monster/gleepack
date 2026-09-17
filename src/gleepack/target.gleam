@@ -3,9 +3,6 @@ import gleam/bit_array
 import gleam/bool
 import gleam/crypto
 import gleam/dynamic/decode
-import gleam/http/request
-import gleam/httpc
-import gleam/io
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -14,9 +11,8 @@ import gleam/result
 import gleam/string
 import gleam_community/ansi
 import gleepack/config
-import gleepack/zip
+import gleepack/io
 import platform.{type Arch, type Os}
-import simplifile
 import snag.{type Snag}
 
 pub opaque type Target {
@@ -170,16 +166,7 @@ fn gh_release_decoder() -> decode.Decoder(GhRelease) {
 }
 
 fn gh_get(url: String) -> Result(String, Snag) {
-  let assert Ok(req) = request.to(url)
-  let req = request.set_header(req, "accept", "application/vnd.github+json")
-  use response <- result.try(
-    httpc.configure()
-    |> httpc.follow_redirects(True)
-    |> httpc.dispatch(req)
-    |> snag.map_error(error_to_string)
-    |> snag.context("GET " <> url),
-  )
-  Ok(response.body)
+  io.fetch(url, [#("accept", "application/vnd.github+json")])
 }
 
 fn parse_asset_name(name: String) -> Result(#(Arch, Os, String), Nil) {
@@ -305,21 +292,15 @@ pub fn installed() -> Result(List(InstalledTarget), Snag) {
   )
   let runtime_base = filepath.join(cache, "runtime")
 
-  use dirs <- result.try(case simplifile.read_directory(runtime_base) {
-    Error(simplifile.Enoent) -> Ok([])
-    other -> other |> snag.map_error(simplifile.describe_error)
-  })
+  use dirs <- result.try(io.read_directory_if_exists(runtime_base))
 
   use acc, dir_name <- list.try_fold(dirs, [])
   let json_path =
     filepath.join(runtime_base, dir_name) |> filepath.join("target.json")
 
-  case simplifile.read(json_path) {
-    Error(simplifile.Enoent) -> Ok(acc)
-    other -> {
-      use json_str <- result.try(
-        other |> snag.map_error(simplifile.describe_error),
-      )
+  case io.read_if_exists(json_path) {
+    Ok(None) -> Ok(acc)
+    Ok(Some(json_str)) -> {
       use target <- result.try(
         json.parse(json_str, target_decoder())
         |> snag.replace_error("Invalid target.json")
@@ -329,15 +310,13 @@ pub fn installed() -> Result(List(InstalledTarget), Snag) {
       let runtime_binary = runtime_binary_path(cache, target)
       let otp_directory = otp_dir_path(cache, target)
 
-      case
-        simplifile.is_file(runtime_binary),
-        simplifile.is_directory(otp_directory)
-      {
-        Ok(True), Ok(True) ->
+      case io.file_exists(runtime_binary), io.directory_exists(otp_directory) {
+        True, True ->
           Ok([InstalledTarget(target:, runtime_binary:, otp_directory:), ..acc])
         _, _ -> Ok(acc)
       }
     }
+    Error(error) -> Error(error)
   }
 }
 
@@ -368,36 +347,29 @@ pub fn uninstall(target: Target) -> Result(Nil, Snag) {
     ansi.pink("   Removing") <> " " <> config.app_name <> " " <> slug(target),
   )
 
-  use Nil <- result.try(
-    simplifile.delete(runtime_dir_path(cache, target))
-    |> snag.map_error(simplifile.describe_error),
-  )
+  use Nil <- result.try(io.delete(runtime_dir_path(cache, target)))
 
   // GC: only remove OTP if no other installed targets still use this version.
   // TODO: can we use installed() here?
   let runtime_base = filepath.join(cache, "runtime")
   use otp_still_needed <- result.try(
-    case simplifile.read_directory(runtime_base) {
-      Error(simplifile.Enoent) -> Ok(False)
-      other -> {
-        use dirs <- result.try(
-          other |> snag.map_error(simplifile.describe_error),
-        )
+    case io.read_directory_if_exists(runtime_base) {
+      Error(error) -> Error(error)
+      Ok(dirs) -> {
+        use <- bool.guard(when: dirs == [], return: Ok(False))
         list.try_fold(dirs, False, fn(acc, dir_name) {
           let json_path =
             filepath.join(runtime_base, dir_name)
             |> filepath.join("target.json")
-          case simplifile.read(json_path) {
-            Error(simplifile.Enoent) -> Ok(acc)
-            other -> {
-              use s <- result.try(
-                other |> snag.map_error(simplifile.describe_error),
-              )
+          case io.read_if_exists(json_path) {
+            Ok(None) -> Ok(acc)
+            Ok(Some(s)) -> {
               json.parse(s, target_decoder())
               |> result.map(fn(t) { acc || t.otp_version == target.otp_version })
               |> snag.replace_error("Invalid target.json")
               |> snag.context(dir_name)
             }
+            Error(error) -> Error(error)
           }
         })
       }
@@ -408,8 +380,7 @@ pub fn uninstall(target: Target) -> Result(Nil, Snag) {
     True -> Ok(Nil)
     False -> {
       io.println(ansi.pink("   Removing") <> " OTP " <> target.otp_version)
-      simplifile.delete(otp_dir_path(cache, target))
-      |> snag.map_error(simplifile.describe_error)
+      io.delete(otp_dir_path(cache, target))
     }
   })
 
@@ -428,19 +399,17 @@ fn install_runtime(cache_dir: String, target: Target) -> Result(String, Snag) {
 
   // If the directory already exists but the revision is stale or absent,
   // remove it so that download() re-fetches rather than bailing out early.
-  let is_stale = case simplifile.read(json_path) {
-    Ok(target_json) ->
+  let is_stale = case io.read_if_exists(json_path) {
+    Ok(Some(target_json)) ->
       case json.parse(target_json, target_decoder()) {
         Ok(installed) -> installed.revision != target.revision
         Error(_) -> True
       }
-    Error(_) -> simplifile.is_directory(target_dir) == Ok(True)
+    Ok(None) | Error(_) -> io.directory_exists(target_dir)
   }
 
   use Nil <- result.try(case is_stale {
-    True ->
-      simplifile.delete(target_dir)
-      |> snag.map_error(simplifile.describe_error)
+    True -> io.delete(target_dir)
     False -> Ok(Nil)
   })
 
@@ -448,10 +417,10 @@ fn install_runtime(cache_dir: String, target: Target) -> Result(String, Snag) {
     download("gleepack " <> slug(target), target_dir, link, hash)
   })
 
-  use Nil <- result.try(
-    simplifile.write(json_path, json.to_string(target_to_json(target)))
-    |> snag.map_error(simplifile.describe_error),
-  )
+  use Nil <- result.try(io.write(
+    json_path,
+    json.to_string(target_to_json(target)),
+  ))
 
   Ok(path)
 }
@@ -466,40 +435,18 @@ fn install_otp(cache_dir: String, target: Target) -> Result(String, Snag) {
 }
 
 fn download(label, target_dir, link, hash) {
-  use <- bool.guard(
-    when: simplifile.is_directory(target_dir) == Ok(True),
-    return: Ok(Nil),
-  )
+  use <- bool.guard(when: io.directory_exists(target_dir), return: Ok(Nil))
 
   io.println(ansi.pink("Downloading") <> " " <> label)
 
-  let assert Ok(request) =
-    request.to(link) |> result.map(request.set_body(_, <<>>))
-
-  use response <- result.try(
-    httpc.configure()
-    |> httpc.timeout(5 * 60 * 1000)
-    |> httpc.follow_redirects(True)
-    |> httpc.dispatch_bits(request)
-    |> snag.map_error(error_to_string)
-    |> snag.context("Downloading " <> link),
-  )
+  use archive <- result.try(io.fetch_bits(link, 5 * 60 * 1000))
 
   use Nil <- result.try(
-    validate_hash(response.body, hash)
+    validate_hash(archive, hash)
     |> snag.context("Verifying hash"),
   )
 
-  use Nil <- result.try(
-    simplifile.create_directory_all(target_dir)
-    |> snag.map_error(simplifile.describe_error),
-  )
-
-  use _ <- result.try(
-    zip.extract(response.body, target_dir)
-    |> snag.map_error(zip.describe_error)
-    |> snag.context("Extracting archive"),
-  )
+  use _ <- result.try(io.extract_archive(archive, target_dir))
 
   io.println(ansi.pink(" Downloaded") <> " " <> label)
 
@@ -551,21 +498,4 @@ fn otp_dir_path(cache_dir: String, target: Target) -> String {
   cache_dir
   |> filepath.join("otp")
   |> filepath.join(target.otp_version)
-}
-
-fn error_to_string(error: httpc.HttpError) -> String {
-  case error {
-    httpc.InvalidUtf8Response -> "Invalid utf-8 body"
-    httpc.FailedToConnect(ip4:, ip6: _) ->
-      "Failed to connect: " <> connect_error_to_string(ip4)
-    httpc.ResponseTimeout -> "Timeout"
-  }
-}
-
-fn connect_error_to_string(error: httpc.ConnectError) -> String {
-  case error {
-    httpc.Posix(code:) -> code
-    httpc.TlsAlert(code:, detail:) ->
-      "TLS Error: " <> detail <> " (" <> code <> ")"
-  }
 }

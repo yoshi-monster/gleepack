@@ -1,7 +1,6 @@
 //// Renders the Erlang entrypoint module and assembles a release archive for a
 //// packaged Gleam application.
 
-import child_process
 import filepath
 import gleam/bit_array
 import gleam/bool
@@ -16,12 +15,12 @@ import gleepack/app_file
 import gleepack/beam_compiler.{type BeamCompiler}
 import gleepack/config
 import gleepack/emu_args
+import gleepack/io
 import gleepack/mode.{type Mode}
 import gleepack/project.{type Project, Gleam}
 import gleepack/project_compiler
 import gleepack/target.{type InstalledTarget}
 import gleepack/zip
-import simplifile
 import snag.{type Snag}
 
 // -- OTP app discovery -------------------------------------------------------
@@ -337,21 +336,12 @@ fn compile_entrypoint(
     |> filepath.join(project.name)
     |> filepath.join("ebin")
 
-  use Nil <- result.try(
-    simplifile.create_directory_all(ebin_path)
-    |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Creating ebin directory"),
-  )
+  use Nil <- result.try(io.create_directory_all(ebin_path))
 
-  use Nil <- result.try(
-    simplifile.write(erl_path, source)
-    |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Writing gleepack_main.erl"),
-  )
+  use Nil <- result.try(io.write(erl_path, source))
 
   use Nil <- result.try(
     beam_compiler.compile(compiler, ebin_path, erl_path)
-    |> snag.map_error(child_process.describe_write_error)
     |> snag.context("Sending entrypoint to BEAM compiler"),
   )
 
@@ -376,9 +366,7 @@ fn compile_entrypoint(
   })
 
   let beam_path = filepath.join(ebin_path, "gleepack_main.beam")
-  simplifile.read_bits(beam_path)
-  |> snag.map_error(simplifile.describe_error)
-  |> snag.context("Reading compiled gleepack_main.beam")
+  io.read_bits(beam_path)
 }
 
 // -- Entrypoint rendering ----------------------------------------------------
@@ -386,9 +374,8 @@ fn compile_entrypoint(
 /// Render the gleepack_main.erl entrypoint source for `project`, calling `module` as the entry point.
 fn render(project: Project, module: String) -> Result(String, Snag) {
   use template <- result.try(
-    simplifile.read(filepath.join(config.priv_dir(), "gleepack_main.erl"))
-    |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Rending gleepack_main.erl template"),
+    io.read(filepath.join(config.priv_dir(), "gleepack_main.erl"))
+    |> snag.context("Rendering gleepack_main.erl template"),
   )
 
   let erl_module = string.replace(module, "/", "@")
@@ -420,17 +407,10 @@ fn render_erl_args(project: Project) -> String {
 // -- Helpers -----------------------------------------------------------------
 
 fn get_files(dir: String, context: String) -> Result(List(String), Snag) {
-  case simplifile.get_files(dir) {
-    Ok(paths) -> Ok(paths)
-    Error(simplifile.Enoent) -> Ok([])
-    Error(error) ->
-      snag.error(simplifile.describe_error(error))
-      |> snag.context("Could not list files for " <> context)
-  }
+  io.get_files_if_exists(dir)
+  |> snag.context("Collecting files for " <> context)
 }
 
 fn read_bits(path: String) -> Result(BitArray, Snag) {
-  simplifile.read_bits(path)
-  |> snag.map_error(simplifile.describe_error)
-  |> snag.context("Reading " <> path)
+  io.read_bits(path)
 }

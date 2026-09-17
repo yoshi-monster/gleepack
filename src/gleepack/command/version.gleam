@@ -1,6 +1,6 @@
-import gleam/io
 import gleam_community/ansi
 import gleepack/config
+import gleepack/io
 import glint.{type Command}
 import snag.{type Snag}
 

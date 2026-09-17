@@ -1,19 +1,15 @@
-import child_process
-import child_process/stdio
-import gleam/int
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import gleepack/command/build
 import gleepack/command/run
 import gleepack/config
+import gleepack/io
 import gleepack/mode
 import gleepack/project
 import gleepack/target
 import glint.{type Command}
-import simplifile
 import snag.{type Snag}
-import temporary
 
 pub fn command() -> Command(Result(Nil, Snag)) {
   use <- glint.command_help(
@@ -75,19 +71,12 @@ Defaults to the highest available OTP version for the current platform.
 
       run.clean_leftover_executables(project.name)
 
-      case
-        temporary.create(
-          temporary.file()
-            |> temporary.in_directory(config.build_dir)
-            |> temporary.with_prefix(project.name <> "-"),
-          run: build_and_shell(_, project, available, native_target),
-        )
-      {
-        Ok(result) -> result
-        Error(file_error) ->
-          snag.error(simplifile.describe_error(file_error))
-          |> snag.context("Creating temporary file")
-      }
+      io.with_temporary_file(
+        directory: config.build_dir,
+        prefix: project.name <> "-",
+        run: build_and_shell(_, project, available, native_target),
+      )
+      |> result.flatten
     }
 
     project.Gleam(target: Some(project.Javascript), ..) ->
@@ -109,23 +98,13 @@ fn build_and_shell(tmp_path, project, available, target) {
 
   let assert [#(_, tmp_path)] = pairs
 
-  case
-    child_process.from_file(tmp_path)
-    |> child_process.env("GLEEPACK_RAW_ARGS", "1")
-    |> child_process.arg("--")
-    |> child_process.arg2("-root", "/__gleepack__")
-    |> child_process.arg2("-bindir", "/__gleepack__/bin")
-    |> child_process.arg2("-boot", "/__gleepack__/start")
-    |> child_process.arg2("-start_epmd", "false")
-    |> child_process.arg2("-dist_listen", "false")
-    |> child_process.run(stdio.inherit())
-  {
-    Ok(child_process.Output(status_code: 0, output: _)) -> Ok(Nil)
-    Ok(child_process.Output(status_code:, output: _)) ->
-      snag.error(
-        "Command failed with status code " <> int.to_string(status_code),
-      )
-    Error(error) -> snag.error(child_process.describe_start_error(error))
-  }
-  |> snag.context("Running Erlang shell")
+  io.from_file(tmp_path)
+  |> io.env("GLEEPACK_RAW_ARGS", "1")
+  |> io.arg("--")
+  |> io.arg2("-root", "/__gleepack__")
+  |> io.arg2("-bindir", "/__gleepack__/bin")
+  |> io.arg2("-boot", "/__gleepack__/start")
+  |> io.arg2("-start_epmd", "false")
+  |> io.arg2("-dist_listen", "false")
+  |> io.run
 }

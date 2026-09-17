@@ -29,8 +29,8 @@ run(Module) ->
             stop(1)
     end.
 
-%% Swap OTP's default erl_signal_handler — which logs
-%% "SIGTERM received - shutting down" via error_logger — for a quiet
+%% Swap OTP's default erl_signal_handler - which logs
+%% "SIGTERM received - shutting down" via error_logger - for a quiet
 %% replacement that still calls init:stop/0. sigusr1 and sigquit keep
 %% their stock halt behaviour.
 quiet_sigterm_handler() ->

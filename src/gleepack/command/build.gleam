@@ -1,6 +1,5 @@
 import filepath
 import gleam/dict
-import gleam/io
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
@@ -8,12 +7,12 @@ import gleam/string
 import gleam_community/ansi
 import gleepack/config
 import gleepack/dependency
+import gleepack/io
 import gleepack/mode.{type Mode}
 import gleepack/project
 import gleepack/release_compiler
 import gleepack/target
 import glint.{type Command}
-import simplifile
 import snag.{type Snag}
 
 pub fn command() -> Command(Result(Nil, Snag)) {
@@ -192,11 +191,9 @@ pub fn build(
     |> snag.context("Installing runtime " <> target.slug(runtime_target)),
   )
 
-  use runtime_binary <- result.try(
-    simplifile.read_bits(runtime_installed.runtime_binary)
-    |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Reading runtime binary"),
-  )
+  use runtime_binary <- result.try(io.read_bits(
+    runtime_installed.runtime_binary,
+  ))
 
   // Preserve the runtime binary's extension (e.g. .exe on Windows).
   let output_path = case filepath.extension(runtime_installed.runtime_binary) {
@@ -205,21 +202,7 @@ pub fn build(
   }
 
   use Nil <- result.try(
-    simplifile.create_directory_all(filepath.directory_name(output_path))
-    |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Creating output directory"),
-  )
-
-  use Nil <- result.try(
-    simplifile.write_bits(output_path, <<runtime_binary:bits, zip:bits>>)
-    |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Writing " <> output_path),
-  )
-
-  use Nil <- result.try(
-    simplifile.set_permissions_octal(output_path, 0o755)
-    |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Setting executable permissions on " <> output_path),
+    io.write_executable(output_path, <<runtime_binary:bits, zip:bits>>),
   )
 
   io.println(ansi.pink("      Built ") <> output_path)

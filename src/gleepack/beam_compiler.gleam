@@ -1,17 +1,14 @@
-import child_process.{type Process}
 import child_process/line_buffer.{type LineBuffer}
-import child_process/stdio
 import directories
 import filepath
 import gleam/erlang/process.{type Selector}
-import gleam/io
 import gleam/list
 import gleam/result
 import gleepack/config
 import gleepack/eterm/decode
 import gleepack/eterm/encode
+import gleepack/io.{type Process}
 import gleepack/target.{type InstalledTarget}
-import simplifile
 import snag.{type Snag}
 
 pub opaque type BeamCompiler {
@@ -34,24 +31,22 @@ pub fn start(target: InstalledTarget) -> Result(BeamCompiler, Snag) {
   let script_dest = filepath.join(config.build_dir, "gleepack_compiler.erl")
   use _ <- result.try(extract_compiler_script(script_dest))
   use process <- result.try(
-    child_process.from_file(target.runtime_binary)
-    |> child_process.args(["-L", "-d", "-Bd", "-sbtu", "-A0"])
-    |> child_process.arg2("-P", "65536")
-    |> child_process.arg2("-Q", "1024")
-    |> child_process.arg("--")
-    |> child_process.arg2("-root", target.otp_directory)
-    |> child_process.arg2("-bindir", target.otp_directory)
-    |> child_process.arg2("-home", directories.home_dir() |> result.unwrap("/"))
-    |> child_process.arg2("-boot", filepath.join(target.otp_directory, "start"))
-    |> child_process.arg2("-mode", "minimal")
-    |> child_process.arg("-noshell")
-    |> child_process.args(["-run", "escript", "start"])
-    |> child_process.arg("-extra")
-    |> child_process.arg(script_dest)
-    |> child_process.arg(config.build_dir)
-    |> child_process.spawn_raw(stdio.capture(False))
-    |> snag.map_error(child_process.describe_start_error)
-    |> snag.context("Starting BEAM compiler subprocess"),
+    io.from_file(target.runtime_binary)
+    |> io.args(["-L", "-d", "-Bd", "-sbtu", "-A0"])
+    |> io.arg2("-P", "65536")
+    |> io.arg2("-Q", "1024")
+    |> io.arg("--")
+    |> io.arg2("-root", target.otp_directory)
+    |> io.arg2("-bindir", target.otp_directory)
+    |> io.arg2("-home", directories.home_dir() |> result.unwrap("/"))
+    |> io.arg2("-boot", filepath.join(target.otp_directory, "start"))
+    |> io.arg2("-mode", "minimal")
+    |> io.arg("-noshell")
+    |> io.args(["-run", "escript", "start"])
+    |> io.arg("-extra")
+    |> io.arg(script_dest)
+    |> io.arg(config.build_dir)
+    |> io.spawn(output: io.Capture(False)),
   )
 
   Ok(Compiler(process:, line_buffer: line_buffer.new()))
@@ -59,26 +54,15 @@ pub fn start(target: InstalledTarget) -> Result(BeamCompiler, Snag) {
 
 fn extract_compiler_script(dest: String) -> Result(Nil, Snag) {
   let src = filepath.join(config.priv_dir(), "gleepack_compiler.erl")
-  use _ <- result.try(
-    simplifile.create_directory_all(config.build_dir)
-    |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Creating " <> config.build_dir),
-  )
-  use content <- result.try(
-    simplifile.read_bits(src)
-    |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Reading gleepack_compiler.erl from priv"),
-  )
-  simplifile.write_bits(dest, content)
-  |> snag.map_error(simplifile.describe_error)
-  |> snag.context("Writing gleepack_compiler.erl to " <> dest)
+  use content <- result.try(io.read_bits(src))
+  io.write_bits(dest, content)
 }
 
 pub fn select(
   selector: Selector(Msg),
   compiler: BeamCompiler,
 ) -> Selector(Msg) {
-  stdio.select(selector, compiler.process, Data, Exit)
+  io.select_process(selector, compiler.process, Data, Exit)
 }
 
 /// Write a source file to the compiler queue.
@@ -89,8 +73,8 @@ pub fn compile(
   compiler: BeamCompiler,
   out: String,
   module: String,
-) -> Result(Nil, child_process.WriteError) {
-  child_process.write(
+) -> Result(Nil, Snag) {
+  io.write_process(
     compiler.process,
     encode.tuple([encode.string(out), encode.string(module)])
       |> encode.to_string,
@@ -98,7 +82,7 @@ pub fn compile(
 }
 
 pub fn stop(compiler: BeamCompiler) -> Nil {
-  child_process.close(compiler.process)
+  io.close_process(compiler.process)
 }
 
 pub fn handle_msg(compiler: BeamCompiler, msg: Msg) -> Update {

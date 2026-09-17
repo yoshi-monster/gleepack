@@ -5,8 +5,8 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import gleepack/config
+import gleepack/io
 import gleepack/target
-import simplifile
 import snag.{type Snag}
 import tom.{type Toml}
 
@@ -79,8 +79,7 @@ fn read_internal(
   available available: List(target.Target),
 ) -> Result(Project, Snag) {
   use file_contents <- result.try(
-    simplifile.read(filepath.join(dir, "gleam.toml"))
-    |> snag.map_error(simplifile.describe_error)
+    io.read(filepath.join(dir, "gleam.toml"))
     |> snag.context("Could not read gleam.toml from " <> dir),
   )
 
@@ -216,9 +215,7 @@ fn read_manifest_packages(
 ) -> Result(Manifest, Snag) {
   let path = filepath.join(dir, "manifest.toml")
   use contents <- result.try(
-    simplifile.read(path)
-    |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Could not read " <> path),
+    io.read(path) |> snag.context("Could not read " <> path),
   )
 
   use manifest <- result.try(

@@ -1,6 +1,6 @@
 import gleepack/config
+import gleepack/io
 import glint.{type Command}
-import simplifile
 import snag.{type Snag}
 
 pub fn command() -> Command(Result(Nil, Snag)) {
@@ -14,10 +14,6 @@ This is usually not necessary - gleepack always recompiles the entire project.
   )
   use _, _, _ <- glint.command
 
-  case simplifile.delete(config.build_dir) {
-    Ok(Nil) | Error(simplifile.Enoent) -> Ok(Nil)
-    Error(e) ->
-      snag.error(simplifile.describe_error(e))
-      |> snag.context("Could not remove " <> config.build_dir)
-  }
+  io.delete(config.build_dir)
+  |> snag.context("Could not remove " <> config.build_dir)
 }

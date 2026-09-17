@@ -1,16 +1,13 @@
-import child_process
-import child_process/stdio
 import filepath
 import gleam/dict
-import gleam/int
 import gleam/list
 import gleam/result
 import gleam/set.{type Set}
 import gleepack/config
+import gleepack/io
 import gleepack/mode.{type Mode}
 import gleepack/project.{type Manifest, type Project}
 import gleepack/target
-import simplifile
 import snag.{type Snag}
 
 type StackItem {
@@ -33,12 +30,6 @@ pub fn download(
   available available: List(target.Target),
 ) -> Result(Manifest, Snag) {
   use _ <- result.try(gleam_deps_download("."))
-  use cwd <- result.try(
-    simplifile.current_directory()
-    |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Reading current directory"),
-  )
-
   use manifest <- result.try(project.manifest(available))
 
   use rewritten <- result.try({
@@ -52,7 +43,7 @@ pub fn download(
       project.Gleam(source: project.Local, src:, name: dep_name, ..)
         if src != "."
       -> {
-        use _ <- result.map(mirror_path_dep(dep_name, src, cwd))
+        use _ <- result.map(mirror_path_dep(dep_name, src))
         [#(name, project.Gleam(..project, src: mirror_dest(dep_name))), ..acc]
       }
 
@@ -62,8 +53,7 @@ pub fn download(
         let paths = [filepath.join(src, "test"), filepath.join(src, "dev")]
 
         use _ <- result.try(
-          simplifile.delete_all(paths)
-          |> snag.map_error(simplifile.describe_error)
+          io.delete_all(paths)
           |> snag.context("Deleting test and dev directories for " <> name),
         )
 
@@ -81,87 +71,33 @@ fn mirror_dest(name: String) -> String {
   filepath.join(config.packages_dir, name)
 }
 
-fn mirror_path_dep(
-  name: String,
-  src: String,
-  cwd: String,
-) -> Result(Nil, Snag) {
+fn mirror_path_dep(name: String, src: String) -> Result(Nil, Snag) {
   let dest = mirror_dest(name)
   // Wipe any prior content so leftovers from previous runs (or whatever
   // `gleam deps download` placed here) don't leak into the compile. Safe
-  // for symlinks too: simplifile.delete uses read_link_info, so symlink
-  // *targets* are not followed.
-  let _ = simplifile.delete(dest)
+  // for symlinks too: deletion does not follow symlink targets.
+  use _ <- result.try(io.reset_directory(dest))
   use _ <- result.try(
-    simplifile.create_directory_all(dest)
-    |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Creating " <> dest),
-  )
-  use _ <- result.try(
-    mirror_entry(
+    io.link_or_copy(
       filepath.join(src, "gleam.toml"),
       filepath.join(dest, "gleam.toml"),
-      cwd,
     )
     |> snag.context("Mirroring gleam.toml from " <> src),
   )
   use _ <- result.try(
-    mirror_entry(filepath.join(src, "src"), filepath.join(dest, "src"), cwd)
+    io.link_or_copy(filepath.join(src, "src"), filepath.join(dest, "src"))
     |> snag.context("Mirroring src/ from " <> src),
   )
   let priv_src = filepath.join(src, "priv")
-  case simplifile.is_directory(priv_src) {
-    Ok(True) ->
-      mirror_entry(priv_src, filepath.join(dest, "priv"), cwd)
-      |> snag.context("Mirroring priv/ from " <> src)
-    _ -> Ok(Nil)
-  }
-}
-
-fn mirror_entry(
-  source: String,
-  dest: String,
-  cwd: String,
-) -> Result(Nil, Snag) {
-  let abs_source = case filepath.is_absolute(source) {
-    True -> source
-    False -> filepath.join(cwd, source)
-  }
-  case simplifile.create_symlink(to: abs_source, from: dest) {
-    Ok(_) -> Ok(Nil)
-    Error(_) -> copy_entry(source, dest)
-  }
-}
-
-fn copy_entry(source: String, dest: String) -> Result(Nil, Snag) {
-  case simplifile.is_directory(source) {
-    Ok(True) ->
-      simplifile.copy_directory(at: source, to: dest)
-      |> snag.map_error(simplifile.describe_error)
-      |> snag.context("Copying directory " <> source)
-    _ ->
-      simplifile.copy_file(at: source, to: dest)
-      |> snag.map_error(simplifile.describe_error)
-      |> snag.context("Copying file " <> source)
-  }
+  io.link_or_copy_directory_if_exists(priv_src, filepath.join(dest, "priv"))
+  |> snag.context("Mirroring priv/ from " <> src)
 }
 
 fn gleam_deps_download(in directory: String) -> Result(Nil, Snag) {
-  case
-    child_process.from_name("gleam")
-    |> child_process.cwd(directory)
-    |> child_process.args(["deps", "download"])
-    |> child_process.run(stdio.inherit())
-  {
-    Ok(child_process.Output(status_code: 0, output: _)) -> Ok(Nil)
-    Ok(child_process.Output(status_code:, output: _)) ->
-      snag.error(
-        "gleam deps download failed with status code "
-        <> int.to_string(status_code),
-      )
-    Error(error) -> snag.error(child_process.describe_start_error(error))
-  }
-  |> snag.context("Running gleam deps download in " <> directory)
+  io.from_name("gleam")
+  |> io.args(["deps", "download"])
+  |> io.cwd(directory)
+  |> io.run
 }
 
 /// Resolve the dependencies that should be bundled into the release for the

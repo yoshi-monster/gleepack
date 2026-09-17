@@ -1,6 +1,4 @@
-import argv.{Argv}
 import gleam/int
-import gleam/io
 import gleam/list
 import gleam/string
 import gleam_community/ansi
@@ -14,6 +12,7 @@ import gleepack/command/targets
 import gleepack/command/test_command
 import gleepack/command/version
 import gleepack/config
+import gleepack/io
 import glint
 import snag
 
@@ -38,7 +37,7 @@ pub fn main() -> Nil {
     |> glint.add(at: ["clean"], do: clean.command())
     |> glint.add(at: ["version"], do: version.command())
 
-  let Argv(arguments:, ..) = argv.load()
+  let arguments = io.arguments()
 
   let result = case glint.execute(cli, arguments) {
     Ok(glint.Help(help)) -> Ok(io.println(help))
@@ -53,7 +52,7 @@ pub fn main() -> Nil {
     Error(Nil) -> 1
   }
 
-  halt(exit_code)
+  io.halt(exit_code)
 }
 
 fn format_error(err: snag.Snag) -> String {
@@ -73,6 +72,3 @@ fn format_error(err: snag.Snag) -> String {
     }
   }
 }
-
-@external(erlang, "erlang", "halt")
-fn halt(status_code: Int) -> Nil

@@ -1,12 +1,11 @@
-import gleam/io
 import gleam/list
 import gleam/result
 import gleam/string
 import gleam_community/ansi
 import gleepack/config
+import gleepack/io
 import gleepack/target
 import glint.{type Command}
-import input
 import snag.{type Snag}
 
 pub const group_help = "
@@ -119,7 +118,7 @@ currently installed.
   case installed {
     [] -> Ok(io.println(ansi.pink("      Clean") <> " No targets installed"))
     _ -> {
-      case input.input(prompt: "Remove all installed targets? [y|N] ") {
+      case io.prompt("Remove all installed targets? [y|N] ") {
         Ok("y") | Ok("Y") ->
           list.try_each(installed, fn(t) { target.uninstall(t.target) })
         _ -> Ok(io.println(ansi.pink("      Clean") <> " Cancelled"))

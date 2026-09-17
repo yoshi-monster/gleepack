@@ -3,7 +3,7 @@ import gleam/option
 import gleam/result
 import gleepack/eterm/decode.{type DecodeError}
 import gleepack/eterm/encode
-import simplifile
+import gleepack/io
 import snag.{type Snag}
 
 pub type AppFile {
@@ -19,7 +19,6 @@ pub type AppFile {
 
 pub type Error {
   ParseError(List(DecodeError))
-  ReadError(simplifile.FileError)
 }
 
 /// Describe an app_file error as a human-readable string.
@@ -30,7 +29,6 @@ pub fn describe_error(error: Error) -> String {
       "parse error: expected " <> expected <> ", found " <> found
     ParseError([DecodeError(expected:, found:, path: [p, ..]), ..]) ->
       "parse error: expected " <> expected <> ", found " <> found <> " at " <> p
-    ReadError(e) -> simplifile.describe_error(e)
   }
 }
 
@@ -73,11 +71,7 @@ pub fn parse(content: String) -> Result(AppFile, Error) {
 
 /// Read and parse a `.app` file from disk.
 pub fn read(path: String) -> Result(AppFile, Snag) {
-  use content <- result.try(
-    simplifile.read(path)
-    |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Reading " <> path),
-  )
+  use content <- result.try(io.read(path))
 
   parse(content)
   |> snag.map_error(describe_error)
@@ -112,7 +106,5 @@ pub fn to_string(app: AppFile) -> String {
 
 /// Write an `AppFile` to disk.
 pub fn write(app: AppFile, path: String) -> Result(Nil, Snag) {
-  simplifile.write(path, to_string(app))
-  |> snag.map_error(simplifile.describe_error)
-  |> snag.context("Writing " <> path)
+  io.write(path, to_string(app))
 }

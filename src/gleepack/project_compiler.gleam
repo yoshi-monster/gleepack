@@ -1,8 +1,6 @@
 //// Drives a two-stage pipeline: compile packages to .erl (stage 1) while
 //// concurrently compiling .erl to .beam via the beam compiler (stage 2).
 
-import child_process.{type Process}
-import child_process/stdio
 import directories
 import filepath
 import gleam/bool
@@ -10,7 +8,6 @@ import gleam/deque.{type Deque as Queue} as queue
 import gleam/dict.{type Dict}
 import gleam/erlang/process
 import gleam/int
-import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -19,10 +16,10 @@ import gleam_community/ansi
 import gleepack/app_file
 import gleepack/beam_compiler.{type BeamCompiler}
 import gleepack/config
+import gleepack/io.{type Process}
 import gleepack/mode.{type Mode}
 import gleepack/project.{type Project, Gleam, Mix, Rebar3}
 import gleepack/target.{type InstalledTarget}
-import simplifile
 import snag.{type Snag}
 
 type Msg {
@@ -56,12 +53,6 @@ pub fn compile(
   target: InstalledTarget,
   compiler: BeamCompiler,
 ) -> Result(Nil, Snag) {
-  use _ <- result.try(
-    simplifile.create_directory_all(config.build_dir)
-    |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Creating " <> config.build_dir),
-  )
-
   let otp_apps =
     list.fold(dependencies, dict.new(), fn(acc, p) {
       dict.insert(acc, p.name, p.otp_app)
@@ -164,7 +155,7 @@ fn build_selector(state: LoopState) -> process.Selector(Msg) {
   case state.in_flight {
     None -> selector
     Some(#(_, proc)) ->
-      stdio.select(selector, proc, CompileOutput, CompileFinished)
+      io.select_process(selector, proc, CompileOutput, CompileFinished)
   }
 }
 
@@ -239,7 +230,6 @@ fn on_compile_finished(
       use _ <- result.try(
         list.try_each(artefacts, fn(src) {
           beam_compiler.compile(state.compiler, ebin, src)
-          |> snag.map_error(child_process.describe_write_error)
           |> snag.context("Sending " <> src)
         })
         |> snag.context("Sending files for " <> name <> " to the BEAM compiler"),
@@ -258,8 +248,14 @@ fn on_compile_finished(
       Ok(LoopState(..state, in_flight: None, pending:))
     }
 
-    Mix(..) | Rebar3(..) -> {
-      io.println(ansi.pink("   Compiled ") <> project.name)
+    Mix(src:, name:, otp_app:, ..) -> {
+      use Nil <- result.try(place_mix_output(src, name, otp_app))
+      io.println(ansi.pink("   Compiled ") <> name)
+      Ok(LoopState(..state, in_flight: None))
+    }
+
+    Rebar3(name:, ..) -> {
+      io.println(ansi.pink("   Compiled ") <> name)
       Ok(LoopState(..state, in_flight: None))
     }
   }
@@ -275,7 +271,7 @@ fn collect_artefacts(
   // never contribute their test modules to the release.
   let keep_tests = mode.includes_dev(mode) && project.src == "."
   let artefacts_dir = filepath.join(out, "_gleam_artefacts")
-  case simplifile.get_files(artefacts_dir) {
+  case io.get_files_if_exists(artefacts_dir) {
     Error(_) -> []
     Ok(files) -> list.filter(files, is_artefact(project.src, keep_tests, _))
   }
@@ -295,111 +291,119 @@ fn is_artefact(src, keep_tests, path) {
 fn is_test_artefact(package_src: String, module_name: String) -> Bool {
   let gleam_path = string.replace(module_name, "@", "/") <> ".gleam"
   let test_path = filepath.join(package_src, filepath.join("test", gleam_path))
-  simplifile.is_file(test_path) |> result.unwrap(False)
+  io.file_exists(test_path)
 }
 
 fn spawn(project: Project, target: InstalledTarget) -> Result(Process, Snag) {
-  use _ <- result.try(
-    simplifile.create_directory_all(
-      filepath.join(config.build_dir, project.name)
-      |> filepath.join("ebin"),
-    )
-    |> snag.map_error(simplifile.describe_error)
-    |> snag.context("Creating ebin directory for " <> project.name),
-  )
+  use _ <- result.try(case project {
+    Mix(..) -> Ok(Nil)
+    _ ->
+      io.create_directory_all(
+        filepath.join(config.build_dir, project.name)
+        |> filepath.join("ebin"),
+      )
+  })
   case project {
-    Gleam(..) -> spawn_gleam(project)
-    Rebar3(..) -> spawn_rebar3(project, target)
-    Mix(..) -> spawn_mix(project, target)
+    Gleam(..) -> start_gleam_compiler(project)
+    Rebar3(..) -> start_rebar3_compiler(project, target)
+    Mix(..) -> start_mix_compiler(project, target)
   }
 }
 
-fn spawn_gleam(project: Project) -> Result(Process, Snag) {
+fn start_gleam_compiler(project: Project) -> Result(Process, Snag) {
   let out = filepath.join(config.build_dir, project.name)
-  child_process.from_name("gleam")
-  |> child_process.arg("compile-package")
-  |> child_process.arg("--no-beam")
-  |> child_process.arg2("--target", "erlang")
-  |> child_process.arg2("--package", project.src)
-  |> child_process.arg2("--out", out)
-  |> child_process.arg2("--lib", config.build_dir)
-  |> child_process.spawn_raw(package_stdio(project))
-  |> snag.map_error(child_process.describe_start_error)
-  |> snag.context("Could not start compile for " <> project.name)
+  io.from_name("gleam")
+  |> io.arg("compile-package")
+  |> io.arg("--no-beam")
+  |> io.arg2("--target", "erlang")
+  |> io.arg2("--package", project.src)
+  |> io.arg2("--out", out)
+  |> io.arg2("--lib", config.build_dir)
+  |> io.spawn(output: package_output(project))
 }
 
-fn spawn_rebar3(
+fn start_rebar3_compiler(
   project: Project,
   target: InstalledTarget,
 ) -> Result(Process, Snag) {
+  let out = filepath.join(config.build_dir, project.name)
   // project.src is always build/packages/<name>, so ../../../ reaches the entry package.
-  let out =
-    "../../.." |> filepath.join(config.build_dir) |> filepath.join(project.name)
+  let rebar_out = "../../.." |> filepath.join(out)
   let ebin_glob =
     "../../../" |> filepath.join(config.build_dir) |> filepath.join("/*/ebin")
 
-  child_process.from_file(target.runtime_binary)
-  |> child_process.arg("--")
-  |> child_process.arg2("-root", target.otp_directory)
-  |> child_process.arg2("-bindir", target.otp_directory)
-  |> child_process.arg2("-home", directories.home_dir() |> result.unwrap("/"))
-  |> child_process.arg2("-boot", filepath.join(target.otp_directory, "start"))
-  |> child_process.arg("-noshell")
-  |> child_process.args(["-s", "rebar3", "main"])
-  |> child_process.arg("-extra")
-  |> child_process.arg2("bare", "compile")
-  |> child_process.arg2("--paths", ebin_glob)
-  |> child_process.arg2("--outdir", out)
-  |> child_process.cwd(project.src)
-  |> child_process.env("ERL_COMPILER_OPTIONS", "[{i, \"include\"}]")
-  |> child_process.env("REBAR_PROFILE", "prod")
-  |> child_process.env("REBAR_SKIP_PROJECT_PLUGINS", "true")
-  |> child_process.spawn_raw(package_stdio(project))
-  |> snag.map_error(child_process.describe_start_error)
-  |> snag.context("Could not start compile for " <> project.name)
+  use Nil <- result.try(io.copy_directory_if_exists(
+    filepath.join(project.src, "include"),
+    filepath.join(out, "include"),
+  ))
+
+  io.from_file(target.runtime_binary)
+  |> io.arg("--")
+  |> io.arg2("-root", target.otp_directory)
+  |> io.arg2("-bindir", target.otp_directory)
+  |> io.arg2("-home", directories.home_dir() |> result.unwrap("/"))
+  |> io.arg2("-boot", filepath.join(target.otp_directory, "start"))
+  |> io.arg("-noshell")
+  |> io.args(["-s", "rebar3", "main"])
+  |> io.arg("-extra")
+  |> io.arg2("bare", "compile")
+  |> io.arg2("--paths", ebin_glob)
+  |> io.arg2("--outdir", rebar_out)
+  |> io.cwd(project.src)
+  |> io.env("REBAR_PROFILE", "prod")
+  |> io.env("REBAR_SKIP_PROJECT_PLUGINS", "true")
+  |> io.spawn(output: package_output(project))
 }
 
-fn spawn_mix(
+fn start_mix_compiler(
   project: Project,
   target: InstalledTarget,
 ) -> Result(Process, Snag) {
-  let out =
-    "../../../"
-    |> filepath.join(config.build_dir)
-    |> filepath.join(project.name)
+  let ebin_glob =
+    "../../../" |> filepath.join(config.build_dir) |> filepath.join("/*/ebin")
 
-  child_process.from_file(target.runtime_binary)
-  |> child_process.arg("--")
-  |> child_process.arg2("-root", target.otp_directory)
-  |> child_process.arg2("-bindir", target.otp_directory)
-  |> child_process.arg2("-home", directories.home_dir() |> result.unwrap("/"))
-  |> child_process.arg2("-boot", filepath.join(target.otp_directory, "start"))
-  |> child_process.arg("-noshell")
-  |> child_process.arg2(
-    "-elixir_root",
-    filepath.join(target.otp_directory, "lib"),
-  )
-  |> child_process.args(["-s", "elixir", "start_cli"])
-  |> child_process.args(["-elixir", "ansi_enabled", "true"])
-  |> child_process.arg("-extra")
-  |> child_process.arg("--")
-  |> child_process.arg("compile")
-  |> child_process.arg("--no-deps-check")
-  |> child_process.arg("--no-load-deps")
-  |> child_process.arg("--no-protocol-consolidation")
-  |> child_process.cwd(project.src)
-  |> child_process.env("MIX_BUILD_PATH", out)
-  |> child_process.env("MIX_ENV", "prod")
-  |> child_process.env("MIX_QUIET", "1")
-  |> child_process.spawn_raw(package_stdio(project))
-  |> snag.map_error(child_process.describe_start_error)
-  |> snag.context("Could not start compile for " <> project.name)
+  io.from_file(target.runtime_binary)
+  |> io.arg("--")
+  |> io.arg2("-root", target.otp_directory)
+  |> io.arg2("-bindir", target.otp_directory)
+  |> io.arg2("-home", directories.home_dir() |> result.unwrap("/"))
+  |> io.arg2("-boot", filepath.join(target.otp_directory, "start"))
+  |> io.arg("-noshell")
+  |> io.arg2("-elixir_root", filepath.join(target.otp_directory, "lib"))
+  |> io.args(["-s", "elixir", "start_cli"])
+  |> io.args(["-elixir", "ansi_enabled", "true"])
+  |> io.arg("-extra")
+  |> io.arg2("-pa", ebin_glob)
+  |> io.args(["-S", "mix", "compile"])
+  |> io.arg("--no-deps-check")
+  |> io.arg("--no-load-deps")
+  |> io.arg("--no-protocol-consolidation")
+  |> io.cwd(project.src)
+  |> io.env("MIX_BUILD_PATH", "_build/prod")
+  |> io.env("MIX_ENV", "prod")
+  |> io.env("MIX_QUIET", "1")
+  |> io.spawn(output: package_output(project))
 }
 
-fn package_stdio(project: Project) {
+fn place_mix_output(
+  src: String,
+  name: String,
+  otp_app: String,
+) -> Result(Nil, Snag) {
+  let source =
+    src
+    |> filepath.join("_build/prod/lib")
+    |> filepath.join(otp_app)
+  let destination = filepath.join(config.build_dir, name)
+
+  io.replace_with_link_or_copy_directory(source, destination)
+  |> snag.context("Placing Mix output for " <> otp_app)
+}
+
+fn package_output(project: Project) -> io.ProcessOutput {
   // Show errors for local porjects; suppress output for deps.
   case project {
-    Gleam(source: project.Local, ..) | Rebar3(..) | Mix(..) -> stdio.inherit()
-    _ -> stdio.null()
+    Gleam(source: project.Local, ..) | Rebar3(..) | Mix(..) -> io.Inherit
+    _ -> io.Ignore
   }
 }
