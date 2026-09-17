@@ -65,10 +65,19 @@ pub fn select(
   io.select_process(selector, compiler.process, Data, Exit)
 }
 
+/// Add a package's ebin directory to the compiler's code path.
+pub fn add_path(compiler: BeamCompiler, path: String) -> Result(Nil, Snag) {
+  io.write_process(
+    compiler.process,
+    encode.tuple([encode.atom("add_path"), encode.string(path)])
+      |> encode.to_string,
+  )
+}
+
 /// Write a source file to the compiler queue.
 ///
-/// The compiler reads lines formatted as `{<<"ebin">>,<<"src">>}.` and
-/// compiles them concurrently, outputting one response line per file.
+/// The compiler reads one Erlang term per line and compiles file commands
+/// concurrently, outputting one response line per file.
 pub fn compile(
   compiler: BeamCompiler,
   out: String,
@@ -76,7 +85,11 @@ pub fn compile(
 ) -> Result(Nil, Snag) {
   io.write_process(
     compiler.process,
-    encode.tuple([encode.string(out), encode.string(module)])
+    encode.tuple([
+      encode.atom("compile"),
+      encode.string(out),
+      encode.string(module),
+    ])
       |> encode.to_string,
   )
 }
@@ -103,29 +116,35 @@ fn handle_lines(
 ) -> #(List(String), List(String)) {
   case lines {
     [] -> #(compiled, failed)
-    ["gleepack-compile-ok " <> eterm, ..rest] ->
-      case parse_compile_result(eterm) {
-        Ok(#(_, modules)) ->
+    [line, ..rest] ->
+      case parse_compile_result(line) {
+        Ok(Ok(modules)) ->
           handle_lines(rest, list.append(compiled, modules), failed)
-        Error(Nil) -> handle_lines(rest, compiled, failed)
+        Ok(Error(file)) -> handle_lines(rest, compiled, [file, ..failed])
+        Error(Nil) -> {
+          io.print(line)
+          handle_lines(rest, compiled, failed)
+        }
       }
-    ["gleepack-compile-error " <> eterm, ..rest] ->
-      case parse_compile_result(eterm) {
-        Ok(#(file, _)) -> handle_lines(rest, compiled, [file, ..failed])
-        Error(Nil) -> handle_lines(rest, compiled, failed)
-      }
-    [line, ..rest] -> {
-      io.print(line)
-      handle_lines(rest, compiled, failed)
-    }
   }
 }
 
-fn parse_compile_result(eterm: String) -> Result(#(String, List(String)), Nil) {
+fn parse_compile_result(
+  eterm: String,
+) -> Result(Result(List(String), String), Nil) {
   let decoder = {
-    use file <- decode.element(0, decode.string())
-    use modules <- decode.element(1, decode.list(decode.atom()))
-    decode.success(#(file, modules))
+    use tag <- decode.element(0, decode.atom())
+    case tag {
+      "ok" -> {
+        use modules <- decode.element(1, decode.list(decode.atom()))
+        decode.success(Ok(modules))
+      }
+      "error" -> {
+        use file <- decode.element(1, decode.string())
+        decode.success(Error(file))
+      }
+      _ -> decode.failure(Error(""), expected: "compiler result")
+    }
   }
 
   decode.parse(eterm, decoder) |> result.replace_error(Nil)

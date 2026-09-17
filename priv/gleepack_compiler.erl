@@ -32,9 +32,9 @@ reader_loop(Dispatcher) ->
 % Pending = number of modules dispatched but not yet output a result for.
 dispatcher_loop(Pending) ->
     receive
-        {compiled, Module, Modules} ->
+        {compiled, _Module, Modules} ->
             try
-                io:put_chars(["gleepack-compile-ok ", format_result(Module, Modules), "\n"]),
+                print_result({ok, Modules}),
                 dispatcher_loop(Pending - 1)
             catch
                 error:terminated -> nil;
@@ -42,7 +42,7 @@ dispatcher_loop(Pending) ->
             end;
         {failed, Module} ->
             try
-                io:put_chars(["gleepack-compile-error ", format_result(Module, []), "\n"]),
+                print_result({error, Module}),
                 dispatcher_loop(Pending - 1)
             catch
                 error:terminated -> nil;
@@ -53,35 +53,41 @@ dispatcher_loop(Pending) ->
         Line when is_binary(Line); is_list(Line) ->
             Chars = unicode:characters_to_list(Line),
             {ok, Tokens, _} = erl_scan:string(Chars),
-            {ok, {Out, Module}} = erl_parse:parse_term(Tokens),
-            % Selective receive: only blocks if all workers are busy, leaving
-            % compiled/failed/line/eof messages untouched in the mailbox.
-            %
-            % This is fine since queuing other new files faster in response to
-            % an "ok" messages wouldn't help, we're already blocked here!
-            receive
-                {work_please, Worker} ->
-                    Worker ! {module, Module, Out}
-            end,
-            dispatcher_loop(Pending + 1)
+            {ok, Command} = erl_parse:parse_term(Tokens),
+            case Command of
+                {add_path, Path} ->
+                    code:add_patha(Path),
+                    dispatcher_loop(Pending);
+                {compile, Out, Module} ->
+                    % Selective receive: only blocks if all workers are busy, leaving
+                    % compiled/failed/line/eof messages untouched in the mailbox.
+                    %
+                    % This is fine since queuing other new files faster in response to
+                    % an "ok" messages wouldn't help, we're already blocked here!
+                    receive
+                        {work_please, Worker} ->
+                            Worker ! {module, Module, Out}
+                    end,
+                    dispatcher_loop(Pending + 1)
+            end
     end.
 
 drain(0) ->
     ok;
 drain(Pending) ->
     receive
-        {compiled, Module, Modules} ->
-            try io:put_chars(["gleepack-compile-ok ", format_result(Module, Modules), "\n"])
+        {compiled, _Module, Modules} ->
+            try print_result({ok, Modules})
             catch error:terminated -> nil; error:epipe -> nil end,
             drain(Pending - 1);
         {failed, Module} ->
-            try io:put_chars(["gleepack-compile-error ", format_result(Module, []), "\n"])
+            try print_result({error, Module})
             catch error:terminated -> nil; error:epipe -> nil end,
             drain(Pending - 1)
     end.
 
-format_result(Module, Modules) ->
-    io_lib:format("~0p.", [{Module, Modules}]).
+print_result(Result) ->
+    io:put_chars(io_lib:format("~0p.~n", [Result])).
 
 worker_loop(Parent) ->
     Parent ! {work_please, self()},

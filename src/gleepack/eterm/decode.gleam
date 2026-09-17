@@ -19,6 +19,11 @@ pub fn success(a) {
   decode.success(a)
 }
 
+/// Construct a decoder that always fails with the expected type name.
+pub fn failure(placeholder: a, expected expected: String) -> Decoder(a) {
+  decode.failure(placeholder, expected:)
+}
+
 /// Decode an Erlang integer.
 pub fn int() -> Decoder(Int) {
   decode.int

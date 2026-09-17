@@ -191,6 +191,7 @@ fn on_compile_finished(
     Gleam(name:, dependencies:, dev_dependencies:, extra_applications:, ..) -> {
       let out = filepath.join(config.build_dir, name)
       let ebin = filepath.join(out, "ebin")
+      use Nil <- result.try(beam_compiler.add_path(state.compiler, ebin))
       let artefacts = collect_artefacts(project, state.mode, out)
       let modules =
         list.map(artefacts, fn(src) {
@@ -250,11 +251,21 @@ fn on_compile_finished(
 
     Mix(src:, name:, otp_app:, ..) -> {
       use Nil <- result.try(place_mix_output(src, name, otp_app))
+      use Nil <- result.try(
+        filepath.join(config.build_dir, name)
+        |> filepath.join("ebin")
+        |> beam_compiler.add_path(state.compiler, _),
+      )
       io.println(ansi.pink("   Compiled ") <> name)
       Ok(LoopState(..state, in_flight: None))
     }
 
     Rebar3(name:, ..) -> {
+      use Nil <- result.try(
+        filepath.join(config.build_dir, name)
+        |> filepath.join("ebin")
+        |> beam_compiler.add_path(state.compiler, _),
+      )
       io.println(ansi.pink("   Compiled ") <> name)
       Ok(LoopState(..state, in_flight: None))
     }
