@@ -10,7 +10,7 @@ pub type Mode {
   Debug(module: String)
 
   /// Used by `shell`: bundle dev dependencies and include test artefacts, but
-  /// do not render an entrypoint — the caller drives the runtime directly with
+  /// do not render an entrypoint - the caller drives the runtime directly with
   /// its own boot arguments.
   Shell
 }

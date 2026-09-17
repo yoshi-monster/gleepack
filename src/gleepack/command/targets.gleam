@@ -16,7 +16,7 @@ Manage the targets "
 architecture, operating system, and OTP version. Targets must be installed
 locally before you can build for them.
 
-This is usually not necessary — "
+This is usually not necessary - "
   <> config.app_name
   <> " will automatically download and
 install the right target when you run `build`.
