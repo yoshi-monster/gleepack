@@ -1,5 +1,5 @@
 name = "gleepack"
-version = "1.0.0"
+version = "1.0.2"
 description = "Bundle Gleam applications into standalone executables"
 target = "erlang"
 
