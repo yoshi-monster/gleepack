@@ -58,7 +58,7 @@ Defaults to the highest available OTP version for the current platform.
 /// re-implementing the rest of the pipeline.
 pub fn run(
   module_for module_for: fn(String, Option(String)) -> String,
-  target target_slug: Option(String),
+  target requested_target: Option(String),
   args args: List(String),
 ) -> Result(Nil, Snag) {
   use available <- result.try(
@@ -78,10 +78,9 @@ pub fn run(
     project.Gleam(name:, module: configured, ..) -> {
       let module = module_for(name, configured)
 
-      use native_target <- result.try(resolve_native_target(
-        target_slug,
-        available,
-      ))
+      use native_target <- result.try({
+        resolve_native_target(requested_target, available)
+      })
 
       clean_leftover_executables(project.name)
 

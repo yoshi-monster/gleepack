@@ -45,7 +45,7 @@ pub fn start(target: InstalledTarget) -> Result(BeamCompiler, Snag) {
     |> io.args(["-run", "escript", "start"])
     |> io.arg("-extra")
     |> io.arg(script_dest)
-    |> io.arg(config.build_dir)
+    |> io.arg(target.build_dir(target.target))
     |> io.spawn(output: io.Capture(False)),
   )
 

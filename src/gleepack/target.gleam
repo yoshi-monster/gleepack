@@ -286,6 +286,42 @@ pub type InstalledTarget {
   InstalledTarget(target: Target, runtime_binary: String, otp_directory: String)
 }
 
+@internal
+pub fn for_test(otp_version: String) -> Target {
+  Target(
+    arch: platform.Arm64,
+    os: platform.Linux,
+    otp_version:,
+    extra: None,
+    runtime_link: "",
+    runtime_hash: "",
+    otp_link: "",
+    otp_hash: "",
+    revision: "",
+  )
+}
+
+/// Return the compiled output directory for a target.
+pub fn build_dir(target: Target) -> String {
+  filepath.join(config.build_dir, slug(target))
+}
+
+/// Return the compiled output directory for a package and target.
+pub fn package_build_dir(target: Target, name: String) -> String {
+  build_dir(target) |> filepath.join(name)
+}
+
+/// Return the compiled BEAM directory for a package and target.
+pub fn package_ebin_dir(target: Target, name: String) -> String {
+  package_build_dir(target, name) |> filepath.join("ebin")
+}
+
+/// Return the path used to commit a successfully compiled package cache.
+pub fn package_cache_key_path(target: Target, name: String) -> String {
+  package_build_dir(target, name)
+  |> filepath.join(".gleepack-cache-key")
+}
+
 pub fn installed() -> Result(List(InstalledTarget), Snag) {
   use cache <- result.try(
     config.cache_dir() |> snag.map_error(config.describe_error),

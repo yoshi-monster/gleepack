@@ -15,11 +15,11 @@ import gleam/string
 import gleam_community/ansi
 import gleepack/app_file
 import gleepack/beam_compiler.{type BeamCompiler}
-import gleepack/config
 import gleepack/io.{type Process}
 import gleepack/mode.{type Mode}
+import gleepack/package_cache.{Hit, Miss}
 import gleepack/project.{type Project, Gleam, Mix, Rebar3}
-import gleepack/target.{type InstalledTarget}
+import gleepack/target.{type InstalledTarget, type Target}
 import snag.{type Snag}
 
 type Msg {
@@ -28,22 +28,26 @@ type Msg {
   BeamMsg(beam_compiler.Msg)
 }
 
+type PendingPackage {
+  PendingPackage(name: String, remaining_modules: Int)
+}
+
 type LoopState {
   LoopState(
     target: InstalledTarget,
     compiler: BeamCompiler,
     mode: Mode,
+    cache: package_cache.Cache,
     // Maps package name -> otp_app for resolving .app dependencies.
     otp_apps: Dict(String, String),
     remaining: List(Project),
     in_flight: Option(#(Project, Process)),
-    // Packages whose .erl files are queued in the beam compiler:
-    // (name, remaining module count).
-    pending: Queue(#(String, Int)),
+    // Packages whose .erl files are queued in the beam compiler.
+    pending: Queue(PendingPackage),
   )
 }
 
-/// Compile all packages in `deps` to BEAM files under `config.build_dir`.
+/// Compile all packages in `deps` to BEAM files under the target build dir.
 ///
 /// The caller provides a running `BeamCompiler` so the same instance can be
 /// reused for later compilation steps (e.g. the release entrypoint).
@@ -53,16 +57,25 @@ pub fn compile(
   target: InstalledTarget,
   compiler: BeamCompiler,
 ) -> Result(Nil, Snag) {
+  use gleam_version <- result.try(
+    io.from_name("gleam")
+    |> io.arg("--version")
+    |> io.run_capture
+    |> result.map(string.trim)
+    |> snag.context("Reading Gleam compiler version"),
+  )
   let otp_apps =
     list.fold(dependencies, dict.new(), fn(acc, p) {
       dict.insert(acc, p.name, p.otp_app)
     })
+  let cache = package_cache.new(dependencies, target.target, gleam_version)
 
   let state =
     LoopState(
       target:,
       compiler:,
       mode:,
+      cache:,
       otp_apps:,
       remaining: dependencies,
       in_flight: None,
@@ -116,7 +129,9 @@ fn loop(state: LoopState) -> Result(Nil, Snag) {
             <> " before finishing",
           )
         beam_compiler.Running(compiler:, compiled:, failed: []) -> {
-          let pending = drain_queue(state.pending, list.length(compiled))
+          use pending <- result.try({
+            drain_queue(state.pending, list.length(compiled), state.cache)
+          })
           loop(LoopState(..state, compiler:, pending:))
         }
 
@@ -133,10 +148,23 @@ fn loop(state: LoopState) -> Result(Nil, Snag) {
 // they need all .beam files from previous Gleam packages to be present.
 fn maybe_start_compile(state: LoopState) -> Result(LoopState, Snag) {
   case state.in_flight, state.remaining {
+    None, [Gleam(..) as dep, ..rest] -> {
+      use status <- result.try(package_cache.check(state.cache, dep))
+      case status {
+        Hit -> {
+          let package_path =
+            target.package_ebin_dir(state.target.target, dep.name)
+          use Nil <- result.try({
+            beam_compiler.add_path(state.compiler, package_path)
+          })
+          maybe_start_compile(LoopState(..state, remaining: rest))
+        }
+        Miss -> start_gleam_compile(state, dep, rest)
+      }
+    }
     None, [dep, ..rest] ->
       case dep, queue.is_empty(state.pending) {
-        // we can send more
-        Gleam(..), _ | Rebar3(..), True | Mix(..), True -> {
+        Rebar3(..), True | Mix(..), True -> {
           use proc <- result.try(spawn(dep, state.target))
           Ok(LoopState(..state, in_flight: Some(#(dep, proc)), remaining: rest))
         }
@@ -144,6 +172,20 @@ fn maybe_start_compile(state: LoopState) -> Result(LoopState, Snag) {
       }
     _, _ -> Ok(state)
   }
+}
+
+fn start_gleam_compile(
+  state: LoopState,
+  project: Project,
+  remaining: List(Project),
+) -> Result(LoopState, Snag) {
+  let build_dir = target.package_build_dir(state.target.target, project.name)
+  use Nil <- result.try(
+    io.reset_directory(build_dir)
+    |> snag.context("Resetting build directory for " <> project.name),
+  )
+  use process <- result.try(spawn(project, state.target))
+  Ok(LoopState(..state, in_flight: Some(#(project, process)), remaining:))
 }
 
 fn build_selector(state: LoopState) -> process.Selector(Msg) {
@@ -162,22 +204,28 @@ fn build_selector(state: LoopState) -> process.Selector(Msg) {
 // Drains completed packages from the front of the queue as beam compiler
 // responses arrive, printing a log line for each finished package.
 fn drain_queue(
-  queue: Queue(#(String, Int)),
+  queue: Queue(PendingPackage),
   compiled: Int,
-) -> Queue(#(String, Int)) {
-  use <- bool.guard(when: compiled <= 0, return: queue)
+  cache: package_cache.Cache,
+) -> Result(Queue(PendingPackage), Snag) {
+  use <- bool.guard(when: compiled <= 0, return: Ok(queue))
 
   case queue.pop_front(queue) {
-    Ok(#(#(name, count), queue)) if count > compiled -> {
-      queue.push_front(queue, #(name, count - compiled))
+    Ok(#(PendingPackage(name:, remaining_modules:), queue))
+      if remaining_modules > compiled
+    -> {
+      let pending =
+        PendingPackage(name:, remaining_modules: remaining_modules - compiled)
+      Ok(queue.push_front(queue, pending))
     }
 
-    Ok(#(#(name, count), queue)) -> {
+    Ok(#(PendingPackage(name:, remaining_modules:), queue)) -> {
+      use Nil <- result.try(package_cache.commit(cache, name))
       io.println(ansi.pink("   Compiled ") <> name)
-      drain_queue(queue, compiled - count)
+      drain_queue(queue, compiled - remaining_modules, cache)
     }
 
-    Error(Nil) -> queue
+    Error(Nil) -> Ok(queue)
   }
 }
 
@@ -187,10 +235,12 @@ fn on_compile_finished(
   state: LoopState,
   project: Project,
 ) -> Result(LoopState, Snag) {
+  let name = project.name
+  let out = target.package_build_dir(state.target.target, name)
+  let ebin = target.package_ebin_dir(state.target.target, name)
+
   case project {
-    Gleam(name:, dependencies:, dev_dependencies:, extra_applications:, ..) -> {
-      let out = config.package_build_dir(name)
-      let ebin = config.package_ebin_dir(name)
+    Gleam(dependencies:, dev_dependencies:, extra_applications:, ..) -> {
       use Nil <- result.try(beam_compiler.add_path(state.compiler, ebin))
       let artefacts = collect_artefacts(project, state.mode, out)
       let modules =
@@ -239,31 +289,32 @@ fn on_compile_finished(
       // Packages with no .erl artefacts (interface-only / pure-FFI) never get
       // a beam compiler response, so they'd stay in `pending` forever and
       // block subsequent Rebar3/Mix spawns. Print directly instead.
-      let pending = case artefacts {
+      use pending <- result.try(case artefacts {
         [] -> {
+          use Nil <- result.try(package_cache.commit(state.cache, name))
           io.println(ansi.pink("   Compiled ") <> name)
-          state.pending
+          Ok(state.pending)
         }
-        _ -> queue.push_back(state.pending, #(name, list.length(artefacts)))
-      }
+        _ -> {
+          let pending =
+            PendingPackage(name:, remaining_modules: list.length(artefacts))
+          Ok(queue.push_back(state.pending, pending))
+        }
+      })
       Ok(LoopState(..state, in_flight: None, pending:))
     }
 
-    Mix(src:, name:, otp_app:, ..) -> {
-      use Nil <- result.try(place_mix_output(src, name, otp_app))
-      use Nil <- result.try(beam_compiler.add_path(
-        state.compiler,
-        config.package_ebin_dir(name),
-      ))
+    Mix(src:, otp_app:, ..) -> {
+      use Nil <- result.try({
+        place_mix_output(src, name, otp_app, state.target.target)
+      })
+      use Nil <- result.try(beam_compiler.add_path(state.compiler, ebin))
       io.println(ansi.pink("   Compiled ") <> name)
       Ok(LoopState(..state, in_flight: None))
     }
 
-    Rebar3(name:, ..) -> {
-      use Nil <- result.try(beam_compiler.add_path(
-        state.compiler,
-        config.package_ebin_dir(name),
-      ))
+    Rebar3(..) -> {
+      use Nil <- result.try(beam_compiler.add_path(state.compiler, ebin))
       io.println(ansi.pink("   Compiled ") <> name)
       Ok(LoopState(..state, in_flight: None))
     }
@@ -304,26 +355,28 @@ fn is_test_artefact(package_src: String, module_name: String) -> Bool {
 }
 
 fn spawn(project: Project, target: InstalledTarget) -> Result(Process, Snag) {
-  use _ <- result.try(case project {
-    Mix(..) -> Ok(Nil)
-    _ -> io.create_directory_all(config.package_ebin_dir(project.name))
-  })
+  use _ <- result.try(
+    io.create_directory_all(target.package_ebin_dir(target.target, project.name)),
+  )
   case project {
-    Gleam(..) -> start_gleam_compiler(project)
+    Gleam(..) -> start_gleam_compiler(project, target.target)
     Rebar3(..) -> start_rebar3_compiler(project, target)
     Mix(..) -> start_mix_compiler(project, target)
   }
 }
 
-fn start_gleam_compiler(project: Project) -> Result(Process, Snag) {
-  let out = config.package_build_dir(project.name)
+fn start_gleam_compiler(
+  project: Project,
+  target: Target,
+) -> Result(Process, Snag) {
+  let out = target.package_build_dir(target, project.name)
   io.from_name("gleam")
   |> io.arg("compile-package")
   |> io.arg("--no-beam")
   |> io.arg2("--target", "erlang")
   |> io.arg2("--package", project.src)
   |> io.arg2("--out", out)
-  |> io.arg2("--lib", config.build_dir)
+  |> io.arg2("--lib", target.build_dir(target))
   |> io.spawn(output: package_output(project))
 }
 
@@ -331,11 +384,13 @@ fn start_rebar3_compiler(
   project: Project,
   target: InstalledTarget,
 ) -> Result(Process, Snag) {
-  let out = config.package_build_dir(project.name)
+  let out = target.package_build_dir(target.target, project.name)
   // project.src is always build/packages/<name>, so ../../../ reaches the entry package.
   let rebar_out = "../../.." |> filepath.join(out)
   let ebin_glob =
-    "../../../" |> filepath.join(config.build_dir) |> filepath.join("/*/ebin")
+    "../../../"
+    |> filepath.join(target.build_dir(target.target))
+    |> filepath.join("/*/ebin")
 
   use Nil <- result.try(io.copy_directory_if_exists(
     filepath.join(project.src, "include"),
@@ -365,7 +420,9 @@ fn start_mix_compiler(
   target: InstalledTarget,
 ) -> Result(Process, Snag) {
   let ebin_glob =
-    "../../../" |> filepath.join(config.build_dir) |> filepath.join("/*/ebin")
+    "../../../"
+    |> filepath.join(target.build_dir(target.target))
+    |> filepath.join("/*/ebin")
 
   io.from_file(target.runtime_binary)
   |> io.arg("--")
@@ -394,19 +451,20 @@ fn place_mix_output(
   src: String,
   name: String,
   otp_app: String,
+  target: Target,
 ) -> Result(Nil, Snag) {
   let source =
     src
     |> filepath.join("_build/prod/lib")
     |> filepath.join(otp_app)
-  let destination = config.package_build_dir(name)
+  let destination = target.package_build_dir(target, name)
 
   io.replace_with_link_or_copy_directory(source, destination)
   |> snag.context("Placing Mix output for " <> otp_app)
 }
 
 fn package_output(project: Project) -> io.ProcessOutput {
-  // Show errors for local porjects; suppress output for deps.
+  // Show errors for local projects; suppress output for dependencies.
   case project {
     Gleam(source: project.Local, ..) | Rebar3(..) | Mix(..) -> io.Inherit
     _ -> io.Ignore

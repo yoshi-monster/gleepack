@@ -8,11 +8,16 @@ import gleepack/config
 import gleepack/mode
 import gleepack/project
 import gleepack/release_compiler
+import gleepack/target
 import simplifile
+
+fn build_target() -> target.Target {
+  target.for_test("_release_compiler_test")
+}
 
 fn make_dep(name: String, otp_app: String, src: String) -> project.Project {
   project.Gleam(
-    source: project.Hex,
+    source: project.Hex(outer_checksum: "test"),
     name:,
     version: "1.0.0",
     otp_app:,
@@ -37,7 +42,12 @@ pub fn discover_otp_apps_always_includes_kernel_stdlib_test() {
   let assert Ok(Nil) = simplifile.create_directory_all(otp_dir)
 
   let assert Ok(apps) =
-    release_compiler.discover_otp_apps([], otp_dir, mode.Release(module: "m"))
+    release_compiler.discover_otp_apps(
+      [],
+      build_target(),
+      otp_dir,
+      mode.Release(module: "m"),
+    )
   assert list.contains(apps, "kernel")
   assert list.contains(apps, "stdlib")
 
@@ -68,7 +78,7 @@ fn write_app_file(
 
 pub fn discover_otp_apps_reads_applications_from_app_files_test() {
   let dep_name = "_test_disc_a"
-  let ebin = config.package_ebin_dir(dep_name)
+  let ebin = target.package_ebin_dir(build_target(), dep_name)
   let assert Ok(Nil) = simplifile.create_directory_all(ebin)
   write_app_file(ebin, dep_name, ["kernel", "stdlib"])
 
@@ -85,20 +95,21 @@ pub fn discover_otp_apps_reads_applications_from_app_files_test() {
   let assert Ok(apps) =
     release_compiler.discover_otp_apps(
       [dep],
+      build_target(),
       otp_dir,
       mode.Release(module: "m"),
     )
   assert list.contains(apps, "kernel")
   assert list.contains(apps, "stdlib")
 
-  let _ = simplifile.delete(filepath.join(config.build_dir, dep_name))
+  let _ = simplifile.delete(target.package_build_dir(build_target(), dep_name))
   let _ = simplifile.delete(otp_dir)
 }
 
 pub fn discover_otp_apps_collects_transitively_test() {
   // dep -> kernel -> stdlib (kernel's .app lists stdlib)
   let dep_name = "_test_disc_b"
-  let ebin = config.package_ebin_dir(dep_name)
+  let ebin = target.package_ebin_dir(build_target(), dep_name)
   let assert Ok(Nil) = simplifile.create_directory_all(ebin)
   write_app_file(ebin, dep_name, ["kernel"])
 
@@ -115,20 +126,21 @@ pub fn discover_otp_apps_collects_transitively_test() {
   let assert Ok(apps) =
     release_compiler.discover_otp_apps(
       [dep],
+      build_target(),
       otp_dir,
       mode.Release(module: "m"),
     )
   assert list.contains(apps, "kernel")
   assert list.contains(apps, "stdlib")
 
-  let _ = simplifile.delete(filepath.join(config.build_dir, dep_name))
+  let _ = simplifile.delete(target.package_build_dir(build_target(), dep_name))
   let _ = simplifile.delete(otp_dir)
 }
 
 pub fn discover_otp_apps_excludes_project_deps_test() {
   let dep_a = "_test_disc_c_a"
   let dep_b = "_test_disc_c_b"
-  let ebin_a = config.package_ebin_dir(dep_a)
+  let ebin_a = target.package_ebin_dir(build_target(), dep_a)
   let assert Ok(Nil) = simplifile.create_directory_all(ebin_a)
   // dep_a lists dep_b and kernel in applications
   write_app_file(ebin_a, dep_a, [dep_b, "kernel"])
@@ -141,6 +153,7 @@ pub fn discover_otp_apps_excludes_project_deps_test() {
   let assert Ok(apps) =
     release_compiler.discover_otp_apps(
       [make_dep(dep_a, dep_a, "."), make_dep(dep_b, dep_b, ".")],
+      build_target(),
       otp_dir,
       mode.Release(module: "m"),
     )
@@ -149,7 +162,7 @@ pub fn discover_otp_apps_excludes_project_deps_test() {
   assert !list.contains(apps, dep_b)
   assert list.contains(apps, "kernel")
 
-  let _ = simplifile.delete(filepath.join(config.build_dir, dep_a))
+  let _ = simplifile.delete(target.package_build_dir(build_target(), dep_a))
   let _ = simplifile.delete(otp_dir)
 }
 
@@ -157,8 +170,8 @@ pub fn discover_otp_apps_deduplicates_test() {
   // Two deps both list kernel
   let dep_a = "_test_disc_d_a"
   let dep_b = "_test_disc_d_b"
-  let ebin_a = config.package_ebin_dir(dep_a)
-  let ebin_b = config.package_ebin_dir(dep_b)
+  let ebin_a = target.package_ebin_dir(build_target(), dep_a)
+  let ebin_b = target.package_ebin_dir(build_target(), dep_b)
   let assert Ok(Nil) = simplifile.create_directory_all(ebin_a)
   let assert Ok(Nil) = simplifile.create_directory_all(ebin_b)
   write_app_file(ebin_a, dep_a, ["kernel"])
@@ -172,6 +185,7 @@ pub fn discover_otp_apps_deduplicates_test() {
   let assert Ok(apps) =
     release_compiler.discover_otp_apps(
       [make_dep(dep_a, dep_a, "."), make_dep(dep_b, dep_b, ".")],
+      build_target(),
       otp_dir,
       mode.Release(module: "m"),
     )
@@ -179,15 +193,15 @@ pub fn discover_otp_apps_deduplicates_test() {
   let kernel_count = list.filter(apps, fn(a) { a == "kernel" }) |> list.length
   assert kernel_count == 1
 
-  let _ = simplifile.delete(filepath.join(config.build_dir, dep_a))
-  let _ = simplifile.delete(filepath.join(config.build_dir, dep_b))
+  let _ = simplifile.delete(target.package_build_dir(build_target(), dep_a))
+  let _ = simplifile.delete(target.package_build_dir(build_target(), dep_b))
   let _ = simplifile.delete(otp_dir)
 }
 
 // -- collect_dependency_files tests --
 
 pub fn collect_dependency_files_finds_beam_and_app_test() {
-  let dir = filepath.join(config.build_dir, "_test_dep_a")
+  let dir = target.package_build_dir(build_target(), "_test_dep_a")
   let ebin = filepath.join(dir, "ebin")
   let assert Ok(Nil) = simplifile.create_directory_all(ebin)
   let assert Ok(Nil) =
@@ -197,7 +211,7 @@ pub fn collect_dependency_files_finds_beam_and_app_test() {
 
   let dep =
     project.Gleam(
-      source: project.Hex,
+      source: project.Hex(outer_checksum: "test"),
       name: "_test_dep_a",
       version: "1.0.0",
       otp_app: "_test_dep_a",
@@ -214,7 +228,8 @@ pub fn collect_dependency_files_finds_beam_and_app_test() {
       extra_emu_args: None,
     )
 
-  let assert Ok(files) = release_compiler.collect_dependency_files([dep])
+  let assert Ok(files) =
+    release_compiler.collect_dependency_files([dep], build_target())
   let paths = list.map(files, fn(f) { f.0 })
 
   assert list.contains(paths, "lib/_test_dep_a/ebin/mod_a.beam")
@@ -224,7 +239,7 @@ pub fn collect_dependency_files_finds_beam_and_app_test() {
 }
 
 pub fn collect_dependency_files_skips_gleam_internal_modules_test() {
-  let dir = filepath.join(config.build_dir, "_test_dep_b")
+  let dir = target.package_build_dir(build_target(), "_test_dep_b")
   let ebin = filepath.join(dir, "ebin")
   let assert Ok(Nil) = simplifile.create_directory_all(ebin)
   let assert Ok(Nil) =
@@ -236,7 +251,7 @@ pub fn collect_dependency_files_skips_gleam_internal_modules_test() {
 
   let dep =
     project.Gleam(
-      source: project.Hex,
+      source: project.Hex(outer_checksum: "test"),
       name: "_test_dep_b",
       version: "1.0.0",
       otp_app: "_test_dep_b",
@@ -253,7 +268,8 @@ pub fn collect_dependency_files_skips_gleam_internal_modules_test() {
       extra_emu_args: None,
     )
 
-  let assert Ok(files) = release_compiler.collect_dependency_files([dep])
+  let assert Ok(files) =
+    release_compiler.collect_dependency_files([dep], build_target())
   let paths = list.map(files, fn(f) { f.0 })
 
   assert list.contains(paths, "lib/_test_dep_b/ebin/real_mod.beam")
@@ -264,7 +280,7 @@ pub fn collect_dependency_files_skips_gleam_internal_modules_test() {
 
 pub fn collect_dependency_files_includes_priv_test() {
   // ebin
-  let dir = filepath.join(config.build_dir, "_test_dep_c")
+  let dir = target.package_build_dir(build_target(), "_test_dep_c")
   let ebin = filepath.join(dir, "ebin")
   let assert Ok(Nil) = simplifile.create_directory_all(ebin)
   let assert Ok(Nil) =
@@ -279,7 +295,7 @@ pub fn collect_dependency_files_includes_priv_test() {
 
   let dep =
     project.Gleam(
-      source: project.Hex,
+      source: project.Hex(outer_checksum: "test"),
       name: "_test_dep_c",
       version: "1.0.0",
       otp_app: "_test_dep_c",
@@ -296,7 +312,8 @@ pub fn collect_dependency_files_includes_priv_test() {
       extra_emu_args: None,
     )
 
-  let assert Ok(files) = release_compiler.collect_dependency_files([dep])
+  let assert Ok(files) =
+    release_compiler.collect_dependency_files([dep], build_target())
   let paths = list.map(files, fn(f) { f.0 })
 
   assert list.contains(paths, "lib/_test_dep_c/ebin/mod.beam")

@@ -19,7 +19,7 @@ import gleepack/io
 import gleepack/mode.{type Mode}
 import gleepack/project.{type Project, Gleam}
 import gleepack/project_compiler
-import gleepack/target.{type InstalledTarget}
+import gleepack/target.{type InstalledTarget, type Target}
 import gleepack/zip
 import snag.{type Snag}
 
@@ -34,6 +34,7 @@ import snag.{type Snag}
 /// modules but is not listed in any `.app` file's `applications`.
 pub fn discover_otp_apps(
   dependencies: List(Project),
+  target: Target,
   otp_directory: String,
   mode: Mode,
 ) -> Result(List(String), Snag) {
@@ -42,7 +43,7 @@ pub fn discover_otp_apps(
   use seed <- result.try(
     list.try_fold(dependencies, [], fn(acc, dep) {
       let path =
-        config.package_ebin_dir(dep.name)
+        target.package_ebin_dir(target, dep.name)
         |> filepath.join(dep.otp_app <> ".app")
       case app_file.read(path) {
         Ok(app) -> Ok(list.append(acc, app.applications))
@@ -106,9 +107,10 @@ fn walk_otp_deps(
 /// Collect .beam, .app, and priv files for all production dependencies.
 pub fn collect_dependency_files(
   dependencies: List(Project),
+  target: Target,
 ) -> Result(List(#(String, BitArray)), Snag) {
   use files, dep <- list.try_fold(dependencies, [])
-  use beam_files <- result.try(collect_ebin_files(dep))
+  use beam_files <- result.try(collect_ebin_files(dep, target))
   use priv_files <- result.try(collect_priv_files(dep))
 
   Ok(
@@ -118,8 +120,11 @@ pub fn collect_dependency_files(
   )
 }
 
-fn collect_ebin_files(dep: Project) -> Result(List(#(String, BitArray)), Snag) {
-  let src_dir = config.package_ebin_dir(dep.name)
+fn collect_ebin_files(
+  dep: Project,
+  target: Target,
+) -> Result(List(#(String, BitArray)), Snag) {
+  let src_dir = target.package_ebin_dir(target, dep.name)
   let dst_dir = "lib/" <> dep.otp_app <> "/ebin"
 
   use file_paths <- result.try(get_files(src_dir, dep.name))
@@ -194,19 +199,20 @@ pub fn collect_otp_apps(
 /// beam, and builds a zip archive in memory.
 pub fn assemble(
   project project: Project,
+  target target: Target,
   entrypoint_beam entrypoint_beam: option.Option(BitArray),
   dependencies dependencies: List(Project),
   otp_directory otp_directory: String,
   mode mode: Mode,
 ) -> Result(BitArray, Snag) {
   use otp_apps <- result.try(
-    discover_otp_apps(dependencies, otp_directory, mode)
+    discover_otp_apps(dependencies, target, otp_directory, mode)
     |> snag.context("Discovering OTP application dependencies"),
   )
 
   // TODO: do we really need to walk twice here (dependnecies vs otp apps)
   use dep_files <- result.try(
-    collect_dependency_files(dependencies)
+    collect_dependency_files(dependencies, target)
     |> snag.context("Collecting dependency files"),
   )
   use otp_files <- result.try(
@@ -306,7 +312,7 @@ fn do_build(
     Ok(module) -> {
       use source <- result.try(render(project, module))
       use beam <- result.try(
-        compile_entrypoint(source, project, compiler)
+        compile_entrypoint(source, project, compiler, target.target)
         |> snag.context("Building entrypoint"),
       )
       Ok(option.Some(beam))
@@ -315,6 +321,7 @@ fn do_build(
 
   assemble(
     project:,
+    target: target.target,
     entrypoint_beam:,
     dependencies:,
     otp_directory: target.otp_directory,
@@ -326,9 +333,10 @@ fn compile_entrypoint(
   source: String,
   project: Project,
   compiler: BeamCompiler,
+  target: Target,
 ) -> Result(BitArray, Snag) {
   let erl_path = filepath.join(config.build_dir, "gleepack_main.erl")
-  let ebin_path = config.package_ebin_dir(project.name)
+  let ebin_path = target.package_ebin_dir(target, project.name)
 
   use Nil <- result.try(io.create_directory_all(ebin_path))
 

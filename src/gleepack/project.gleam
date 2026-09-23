@@ -18,7 +18,7 @@ pub type Target {
 }
 
 pub type Source {
-  Hex
+  Hex(outer_checksum: String)
   Local
   Git
 }
@@ -245,14 +245,7 @@ fn read_manifest_package(
     package |> tom.as_table |> snag.map_error(tom_get_error),
   )
 
-  use source <- result.try(case tom.get_string(pkg, ["source"]) {
-    Ok("git") -> Ok(Git)
-    Ok("local") -> Ok(Local)
-    Ok("hex") -> Ok(Hex)
-    Ok(_) ->
-      snag.error(tom_get_error(tom.WrongType(["source"], "Source", "String")))
-    Error(error) -> snag.error(tom_get_error(error))
-  })
+  use source <- result.try(read_manifest_source(pkg))
 
   use name <- result.try(
     tom.get_string(pkg, ["name"]) |> snag.map_error(tom_get_error),
@@ -303,6 +296,23 @@ fn read_manifest_package(
       )
 
     [_, ..] -> snag.error("build_tools needs to be an array of strings")
+  }
+}
+
+fn read_manifest_source(pkg: Dict(String, Toml)) -> Result(Source, Snag) {
+  case tom.get_string(pkg, ["source"]) {
+    Ok("hex") -> {
+      use outer_checksum <- result.try(
+        tom.get_string(pkg, ["outer_checksum"])
+        |> snag.map_error(tom_get_error),
+      )
+      Ok(Hex(outer_checksum:))
+    }
+    Ok("git") -> Ok(Git)
+    Ok("local") -> Ok(Local)
+    Ok(_) ->
+      snag.error(tom_get_error(tom.WrongType(["source"], "Source", "String")))
+    Error(error) -> snag.error(tom_get_error(error))
   }
 }
 

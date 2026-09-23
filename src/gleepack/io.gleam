@@ -130,6 +130,19 @@ pub fn run(command: Command) -> Result(Nil, Snag) {
   |> snag.context("Running " <> description)
 }
 
+/// Run a command to completion and return its combined standard output and
+/// error, reporting the executable and arguments on error.
+pub fn run_capture(command: Command) -> Result(String, Snag) {
+  let #(builder, description) = prepare_command(command)
+  case child_process.run(builder, stdio.capture(True)) {
+    Ok(child_process.Output(status_code: 0, output:)) -> Ok(output)
+    Ok(child_process.Output(status_code:, output: _)) ->
+      snag.error("Exited with status code " <> int.to_string(status_code))
+    Error(error) -> snag.error(child_process.describe_start_error(error))
+  }
+  |> snag.context("Running " <> description)
+}
+
 /// Start a command, retaining its description for later process errors.
 pub fn spawn(
   command: Command,

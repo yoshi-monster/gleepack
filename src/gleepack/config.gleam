@@ -10,16 +10,6 @@ pub const build_dir = "build/" <> app_name
 
 pub const packages_dir = "build/packages"
 
-/// Return the compiled output directory for a package.
-pub fn package_build_dir(name: String) -> String {
-  filepath.join(build_dir, name)
-}
-
-/// Return the compiled BEAM directory for a package.
-pub fn package_ebin_dir(name: String) -> String {
-  package_build_dir(name) |> filepath.join("ebin")
-}
-
 pub type Error {
   NoCacheDirFound
 }
